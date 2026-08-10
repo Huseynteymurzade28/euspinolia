@@ -1,74 +1,76 @@
 # euspinolia
 
-Zig hızlandırmalı, öğretici amaçlı mini tablo/CSV işleme kütüphanesi. Çekirdek
-veri yapıları ve işlemler Zig'de, Python tarafında `ctypes` ile ince bir arayüz.
+A small, educational Zig-accelerated table/CSV processing library. The core
+data structures and operations live in Zig; Python gets a thin `ctypes` layer
+on top.
 
-İsim, "panda karınca" olarak bilinen *Euspinolia* cinsinden geliyor.
+The name comes from *Euspinolia*, the genus of the velvet ant known as the
+"panda ant".
 
-## Durum
+## Status
 
-**Faz 0 — FFI köprüsü.** Henüz tablo işleme yok; şu an sadece Python'un Zig
-kütüphanesini yükleyip C ABI üzerinden fonksiyon çağırabildiği doğrulanmış
-durumda. CSV parser, columnar storage ve DataFrame arayüzü sonraki fazlarda.
+**Phase 0 — FFI bridge.** No table processing yet. What works today is the
+verified path from Python into the Zig library across the C ABI. The CSV
+parser, columnar storage and DataFrame interface come in later phases.
 
-## Gereksinimler
+## Requirements
 
-- Zig 0.16.0 veya üzeri
+- Zig 0.16.0 or newer
 - Python 3.9+
 
-## Kurulum ve çalıştırma
+## Getting started
 
 ```sh
-zig build                    # zig-out/lib/libeuspinolia.so üretir
+zig build                    # produces zig-out/lib/libeuspinolia.so
 python3 -c "import euspinolia; euspinolia.self_check(); print(euspinolia.version())"
 ```
 
-Şu anki API:
+Current API:
 
 ```python
 import euspinolia
 
-euspinolia.ping()        # 3589 — Zig tarafından gelen sabit imza
-euspinolia.add(3, 4)     # 7 — argüman geçişi doğrulaması
+euspinolia.ping()        # 3589 — constant signature from the Zig side
+euspinolia.add(3, 4)     # 7 — argument passing check
 euspinolia.version()     # "0.0.1"
-euspinolia.self_check()  # imza + sürüm uyumsuzluğunda RuntimeError
+euspinolia.self_check()  # raises RuntimeError on signature/version mismatch
 ```
 
-## Testler
+## Tests
 
 ```sh
-zig build test                              # Zig birim testleri
-python3 -m unittest discover -s tests -v    # Python tarafı FFI testleri
+zig build test                              # Zig unit tests
+python3 -m unittest discover -s tests -v    # Python-side FFI tests
 ```
 
-## Proje yapısı
+## Layout
 
 ```
-build.zig            paylaşımlı kütüphane derleme tanımı
-src/root.zig         Zig çekirdeği; dışa açılan semboller `eus_` önekli
-euspinolia/_ffi.py   kütüphaneyi bulma, yükleme, ctypes imza tanımları
-euspinolia/__init__.py  Pythonic sarmalayıcı katman
-tests/test_ffi.py    köprü testleri
+build.zig               shared library build definition
+src/root.zig            Zig core; exported symbols are prefixed with `eus_`
+euspinolia/_ffi.py      library discovery, loading, ctypes signatures
+euspinolia/__init__.py  Pythonic wrapper layer
+tests/test_ffi.py       bridge tests
 ```
 
-Kütüphane varsayılan olarak `zig-out/lib/` altında aranır; farklı bir yol için
-`EUSPINOLIA_LIB` ortam değişkeni kullanılabilir.
+The library is looked up under `zig-out/lib/` by default; set `EUSPINOLIA_LIB`
+to override the path.
 
-## Mimari (hedeflenen)
+## Target architecture
 
 ```
 [Python]  df = euspinolia.read_csv("data.csv")
               │  ctypes call
               ▼
-[Zig]     CSV Parser → Columnar Buffer (her kolon ayrı, tip bilgili array)
+[Zig]     CSV parser → columnar buffer (one typed array per column)
               │
               ▼
-          filter / groupby / aggregate → sonuç yine columnar buffer
-              │  pointer + shape bilgisi
+          filter / groupby / aggregate → columnar buffer again
+              │  pointer + shape info
               ▼
-[Python]  df.head(), df["kolon"], df.to_list()
+[Python]  df.head(), df["column"], df.to_list()
 ```
 
-Kapsam bilinçli olarak sınırlı: multi-index, tarih/zaman tipleri, NaN
-semantiği, join/merge ve pivot table kapsam dışında. Hedef "gerçek bir tablo
-motoru" değil, öğretici ve gerçekten çalışan bir alt küme.
+The scope is deliberately narrow: multi-index, date/time types, NaN semantics,
+join/merge and pivot tables are out. The goal is not a real table engine but a
+teachable subset that genuinely works.

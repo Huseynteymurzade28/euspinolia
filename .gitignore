@@ -10,9 +10,9 @@ __pycache__/
 .venv/
 venv/
 
-# Editör / OS
+# Editor / OS
 .DS_Store
 *.swp
 
-# Kişisel plan dosyası — repoya girmiyor
+# Personal planning file — stays local
 roadmap.md

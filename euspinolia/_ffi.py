@@ -1,9 +1,4 @@
-"""Zig paylaşımlı kütüphanesini bulup ctypes ile yükleyen katman.
-
-Bu modül tek sorumluluğu olan bir yer: kütüphaneyi bul, yükle, fonksiyon
-imzalarını (argtypes/restype) tanımla. Üst katman (`euspinolia/__init__.py`)
-buradaki `lib` nesnesini kullanır, dosya arama derdiyle uğraşmaz.
-"""
+"""Locates and loads the Zig shared library, and declares its C signatures."""
 
 from __future__ import annotations
 
@@ -12,19 +7,16 @@ import os
 import sys
 from pathlib import Path
 
-# Zig tarafındaki `version_string` ile aynı olmalı.
+# Must stay in sync with src/root.zig.
 EXPECTED_VERSION = "0.0.1"
-
-# Zig tarafındaki `magic` sabiti ile aynı olmalı.
 EXPECTED_MAGIC = 0xE05
 
 
 class LibraryNotFoundError(RuntimeError):
-    """Paylaşımlı kütüphane hiçbir arama yolunda bulunamadı."""
+    """The shared library was not found in any search path."""
 
 
 def _library_filename() -> str:
-    """Platforma göre paylaşımlı kütüphane dosya adı."""
     if sys.platform == "win32":
         return "euspinolia.dll"
     if sys.platform == "darwin":
@@ -33,24 +25,16 @@ def _library_filename() -> str:
 
 
 def _candidate_paths() -> list[Path]:
-    """Kütüphanenin aranacağı yollar, öncelik sırasıyla."""
     filename = _library_filename()
+    package_dir = Path(__file__).resolve().parent
     candidates: list[Path] = []
 
-    # 1. Açık override — geliştirme sırasında ve testlerde en kullanışlısı.
     override = os.environ.get("EUSPINOLIA_LIB")
     if override:
         candidates.append(Path(override))
 
-    package_dir = Path(__file__).resolve().parent
-    repo_root = package_dir.parent
-
-    # 2. `zig build` çıktısı (repo içinden çalıştırıldığında normal durum).
-    candidates.append(repo_root / "zig-out" / "lib" / filename)
-
-    # 3. Paketin yanına kopyalanmış hali (ileride paketleme yapıldığında).
+    candidates.append(package_dir.parent / "zig-out" / "lib" / filename)
     candidates.append(package_dir / filename)
-
     return candidates
 
 
@@ -62,20 +46,15 @@ def _load() -> ctypes.CDLL:
         tried.append(str(path))
 
     raise LibraryNotFoundError(
-        "euspinolia paylaşımlı kütüphanesi bulunamadı.\n"
-        "Repo kökünde `zig build` çalıştırın ya da EUSPINOLIA_LIB "
-        "ortam değişkeniyle yolu verin.\n"
-        "Denenen yollar:\n  " + "\n  ".join(tried)
+        "euspinolia shared library not found.\n"
+        "Run `zig build` in the repo root, or point EUSPINOLIA_LIB at it.\n"
+        "Tried:\n  " + "\n  ".join(tried)
     )
 
 
 def _declare_signatures(lib: ctypes.CDLL) -> None:
-    """C imzalarını ctypes'a bildir.
-
-    Bu adım opsiyonel değil: imza bildirilmezse ctypes tüm argümanları
-    ve dönüş değerini `int` (C int, 32-bit) varsayar; i64 değerler ve
-    pointer dönüşleri sessizce bozulur.
-    """
+    # Without these, ctypes assumes C int (32-bit) everywhere and silently
+    # truncates i64 values and pointer returns.
     lib.eus_ping.argtypes = []
     lib.eus_ping.restype = ctypes.c_int32
 

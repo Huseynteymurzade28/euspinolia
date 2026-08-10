@@ -1,6 +1,6 @@
-"""Faz 0 testleri: FFI köprüsü gerçekten çalışıyor mu?
+"""Phase 0 tests: does the FFI bridge actually work?
 
-Çalıştırmak için repo kökünden:
+Run from the repo root:
     zig build && python3 -m unittest discover -s tests -v
 """
 
@@ -10,42 +10,40 @@ import sys
 import unittest
 from pathlib import Path
 
-# Repo kökünü import yoluna ekle ki paket kurulmadan da test edilebilsin.
+# Allow importing the package without installing it.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import euspinolia  # noqa: E402
 
 
 class TestBridge(unittest.TestCase):
-    def test_self_check_gecer(self):
+    def test_self_check_passes(self):
         euspinolia.self_check()
 
-    def test_ping_magic_doner(self):
+    def test_ping_returns_magic(self):
         self.assertEqual(euspinolia.ping(), 0xE05)
 
-    def test_version_eslesir(self):
+    def test_version_matches(self):
         self.assertEqual(euspinolia.version(), euspinolia.__version__)
 
 
-class TestArgumanGecisi(unittest.TestCase):
-    def test_basit_toplama(self):
+class TestArgumentPassing(unittest.TestCase):
+    def test_basic_addition(self):
         self.assertEqual(euspinolia.add(3, 4), 7)
 
-    def test_negatif(self):
+    def test_negative_operands(self):
         self.assertEqual(euspinolia.add(-4, 3), -1)
 
-    def test_i64_araligi(self):
-        """32-bit'e sığmayan değerler bozulmadan gidip gelmeli.
+    def test_i64_range(self):
+        """Values beyond 32 bits must survive the round trip.
 
-        ctypes imzası bildirilmeseydi bu test patlardı — asıl amacı bu.
+        This fails if the ctypes signatures are not declared.
         """
         big = 2**40
         self.assertEqual(euspinolia.add(big, big), 2**41)
 
-    def test_tasmada_sarmalar(self):
-        i64_max = 2**63 - 1
-        i64_min = -(2**63)
-        self.assertEqual(euspinolia.add(i64_max, 1), i64_min)
+    def test_wraps_on_overflow(self):
+        self.assertEqual(euspinolia.add(2**63 - 1, 1), -(2**63))
 
 
 if __name__ == "__main__":

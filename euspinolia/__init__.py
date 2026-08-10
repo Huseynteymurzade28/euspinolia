@@ -1,7 +1,7 @@
-"""euspinolia — Zig hızlandırmalı mini tablo/CSV işleme kütüphanesi.
+"""euspinolia — a small Zig-accelerated table/CSV processing library.
 
-Faz 0: sadece FFI köprüsünün doğrulaması. Gerçek API (read_csv, DataFrame)
-sonraki fazlarda gelecek.
+Phase 0 only verifies the FFI bridge; the real API (read_csv, DataFrame)
+arrives in later phases.
 """
 
 from __future__ import annotations
@@ -14,35 +14,32 @@ __version__ = EXPECTED_VERSION
 
 
 def ping() -> int:
-    """Zig tarafındaki sabit imza değerini döner (`EXPECTED_MAGIC`)."""
+    """Return the constant signature value from the Zig side."""
     return lib.eus_ping()
 
 
 def add(a: int, b: int) -> int:
-    """İki tam sayıyı Zig tarafında toplar. i64 aralığında sarmalar."""
+    """Add two integers in Zig. Wraps within the i64 range."""
     return lib.eus_add(a, b)
 
 
 def version() -> str:
-    """Yüklenmiş Zig kütüphanesinin bildirdiği sürüm."""
+    """Return the version reported by the loaded Zig library."""
     return lib.eus_version().decode("utf-8")
 
 
 def self_check() -> None:
-    """Köprünün sağlığını doğrula; bir şey tutmazsa `RuntimeError` fırlat.
-
-    Yanlış ya da eski bir .so yüklenmişse bunu erken yakalamak için.
-    """
+    """Raise RuntimeError if the loaded library is stale or mismatched."""
     magic = ping()
     if magic != EXPECTED_MAGIC:
         raise RuntimeError(
-            f"eus_ping beklenmeyen değer döndü: {magic:#x} "
-            f"(beklenen {EXPECTED_MAGIC:#x}). Eski bir kütüphane yüklenmiş olabilir."
+            f"eus_ping returned {magic:#x}, expected {EXPECTED_MAGIC:#x}. "
+            "A stale library may be loaded."
         )
 
     lib_version = version()
     if lib_version != EXPECTED_VERSION:
         raise RuntimeError(
-            f"Sürüm uyuşmazlığı: kütüphane {lib_version!r}, "
-            f"Python katmanı {EXPECTED_VERSION!r} bekliyor. `zig build` çalıştırın."
+            f"Version mismatch: library reports {lib_version!r}, "
+            f"Python layer expects {EXPECTED_VERSION!r}. Run `zig build`."
         )
