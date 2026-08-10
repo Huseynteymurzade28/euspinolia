@@ -6,6 +6,7 @@
 
 const std = @import("std");
 
+pub const csv = @import("csv.zig");
 pub const dtype = @import("dtype.zig");
 
 const version_string: [:0]const u8 = "0.0.1";

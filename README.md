@@ -9,9 +9,10 @@ The name comes from *Euspinolia*, the genus of the velvet ant known as the
 
 ## Status
 
-**Phase 0 — FFI bridge.** No table processing yet. What works today is the
-verified path from Python into the Zig library across the C ABI. The CSV
-parser, columnar storage and DataFrame interface come in later phases.
+**Phase 1 — CSV parser.** The Zig side parses CSV into a row-major table and
+infers a type per column. This is not reachable from Python yet: the FFI
+surface is still the Phase 0 smoke-test functions. Columnar storage (Phase 2)
+and the DataFrame interface (Phase 3) come next.
 
 ## Requirements
 
@@ -36,6 +37,24 @@ euspinolia.version()     # "0.0.1"
 euspinolia.self_check()  # raises RuntimeError on signature/version mismatch
 ```
 
+## CSV support
+
+The parser implements a deliberate subset of RFC 4180:
+
+- Quoted fields may contain the delimiter, newlines, and `""` escapes.
+- Both `\n` and `\r\n` end a record; a trailing newline is optional.
+- Blank lines are skipped. Whitespace is never trimmed.
+- The first record is the header; every later record must match its field
+  count, otherwise parsing fails.
+
+Type inference per column widens `int → float → string`:
+
+- An empty cell makes the column `string`. There is no missing-data semantics,
+  so a blank is text rather than an invented null.
+- `nan` and `inf` are text, since non-finite values are out of scope.
+- `0x10` and `1_000` are text. Zig's number parsers accept those source-literal
+  forms, but a spreadsheet would not call them numbers.
+
 ## Tests
 
 ```sh
@@ -47,7 +66,9 @@ python3 -m unittest discover -s tests -v    # Python-side FFI tests
 
 ```
 build.zig               shared library build definition
-src/root.zig            Zig core; exported symbols are prefixed with `eus_`
+src/root.zig            exported C ABI surface; symbols are prefixed with `eus_`
+src/csv.zig             CSV scanner and the row-major Table
+src/dtype.zig           column type inference
 euspinolia/_ffi.py      library discovery, loading, ctypes signatures
 euspinolia/__init__.py  Pythonic wrapper layer
 tests/test_ffi.py       bridge tests
