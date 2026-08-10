@@ -6,6 +6,8 @@
 
 const std = @import("std");
 
+pub const dtype = @import("dtype.zig");
+
 const version_string: [:0]const u8 = "0.0.1";
 
 /// Signature value returned by `eus_ping`; mismatches mean a stale library.
@@ -22,6 +24,10 @@ export fn eus_add(a: i64, b: i64) i64 {
 /// Null-terminated, statically allocated. The caller must not free it.
 export fn eus_version() [*:0]const u8 {
     return version_string.ptr;
+}
+
+test {
+    std.testing.refAllDecls(@This());
 }
 
 test "ping returns the magic signature" {
