@@ -16,3 +16,6 @@ venv/
 
 # Personal planning file — stays local
 roadmap.md
+
+# Scratch CSVs for poking at the library by hand
+data/
