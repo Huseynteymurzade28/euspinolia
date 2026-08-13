@@ -136,8 +136,9 @@ fn unescape(arena: Allocator, raw: []const u8, escapes: usize) ![]const u8 {
 
 /// A parsed CSV file held row-major, owning all of its text.
 ///
-/// Row-major is a deliberate stopgap: it keeps the parser honest and testable
-/// on its own. Columnar storage replaces `rows` in the next phase.
+/// Row-major keeps the parser honest and testable on its own. It is the
+/// staging form: `frame.DataFrame` converts it into columnar storage, which is
+/// what the rest of the library operates on.
 pub const Table = struct {
     arena: std.heap.ArenaAllocator,
     headers: [][]const u8,
