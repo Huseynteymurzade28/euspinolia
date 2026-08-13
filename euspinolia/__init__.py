@@ -290,7 +290,15 @@ class DataFrame:
 
 
 def _format(value: Any) -> str:
-    return value if isinstance(value, str) else repr(value)
+    """Render one cell for display.
+
+    A quoted CSV field may hold newlines and tabs, which would tear the table
+    apart, so they are shown escaped. This is for reading only — indexing the
+    column still gives the exact text.
+    """
+    if not isinstance(value, str):
+        return repr(value)
+    return value.replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
 
 
 def ping() -> int:

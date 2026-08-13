@@ -223,6 +223,15 @@ class TestRepr(unittest.TestCase):
         self.assertIn("40 more rows", rendered)
         self.assertIn("[50 rows x 1 columns]", rendered)
 
+    def test_embedded_newlines_do_not_tear_the_table(self):
+        df = euspinolia.parse_csv('note,n\n"two\nlines",1\n')
+        rendered = repr(df)
+        self.assertIn("two\\nlines", rendered)
+        # One header line, one row, a blank line and the shape footer.
+        self.assertEqual(len(rendered.splitlines()), 4)
+        # The escaping is display-only; the value itself is untouched.
+        self.assertEqual(df["note"][0], "two\nlines")
+
     def test_column_repr_names_its_type(self):
         rendered = repr(euspinolia.parse_csv(SAMPLE)["age"])
         self.assertIn("'age'", rendered)
