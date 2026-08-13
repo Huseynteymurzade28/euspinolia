@@ -39,6 +39,11 @@ zig build   # produces zig-out/lib/libeuspinolia.so, which the package loads
 python3 -c "import euspinolia; euspinolia.self_check()"
 ```
 
+`zig build` produces a **ReleaseSafe** library rather than Zig's usual Debug
+default — Debug parses about 12x slower, which would make the library slower
+than the `csv` module it is meant to beat. Pass `-Doptimize=ReleaseFast` to drop
+the safety checks, or `-Doptimize=Debug` while working on the Zig side.
+
 ## API
 
 ```python
@@ -84,6 +89,24 @@ Numeric columns are read through the Zig buffer rather than copied out of it,
 so `df["age"][0]` costs an array index and no allocation. A `Column` keeps its
 frame alive, so it never outlives the memory it points at — reading either one
 after `close()` raises `ValueError` instead of touching freed memory.
+
+## Performance
+
+Reading an 18 MB CSV — 500,000 rows, 5 columns — on one machine, best of five
+runs, against Python's standard `csv` module:
+
+| | time | |
+|---|---|---|
+| `euspinolia.read_csv` | 0.20s | parses, infers types, builds columns |
+| `csv.reader` → list of rows | 0.59s | strings only, no types | 
+| `csv.reader` + `int`/`float` per field | 0.61s | the same work | 
+
+So roughly **3x** for the same job, and the gap is not the parsing alone: the
+`csv` module already pays for a Python tuple per row before any conversion,
+while euspinolia hands back typed columns Python never has to materialise.
+
+A proper benchmark against pandas is Phase 6; treat these as a sanity check
+that the Zig side is pulling its weight, not as a published result.
 
 ## CSV support
 
