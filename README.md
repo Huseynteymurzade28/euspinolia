@@ -7,12 +7,25 @@ on top.
 The name comes from *Euspinolia*, the genus of the velvet ant known as the
 "panda ant".
 
+```python
+>>> import euspinolia
+>>> df = euspinolia.read_csv("people.csv")
+>>> df
+        name  age  score      city
+0        ada   36   91.5    London
+1      grace   45   88.0  New York
+2  Doe, John   29  73.25     Paris
+
+[3 rows x 4 columns]
+>>> df["age"].to_list()
+[36, 45, 29]
+```
+
 ## Status
 
-**Phase 2 — columnar storage.** The Zig side parses CSV, infers a type per
-column, and stores the result column by column in a `DataFrame`. None of this
-is reachable from Python yet: the FFI surface is still the Phase 0 smoke-test
-functions, and exposing the DataFrame across it is Phase 3.
+**Phase 3 — reading and indexing from Python.** Reading a CSV, inspecting its
+shape and pulling out columns all work. Filtering and aggregation (Phase 4) and
+`groupby` (Phase 5) are next; see `roadmap.md`.
 
 ## Requirements
 
@@ -22,20 +35,55 @@ functions, and exposing the DataFrame across it is Phase 3.
 ## Getting started
 
 ```sh
-zig build                    # produces zig-out/lib/libeuspinolia.so
-python3 -c "import euspinolia; euspinolia.self_check(); print(euspinolia.version())"
+zig build   # produces zig-out/lib/libeuspinolia.so, which the package loads
+python3 -c "import euspinolia; euspinolia.self_check()"
 ```
 
-Current API:
+## API
 
 ```python
 import euspinolia
 
-euspinolia.ping()        # 3589 — constant signature from the Zig side
-euspinolia.add(3, 4)     # 7 — argument passing check
-euspinolia.version()     # "0.0.1"
-euspinolia.self_check()  # raises RuntimeError on signature/version mismatch
+df = euspinolia.read_csv("people.csv")   # parse a file
+df = euspinolia.parse_csv(csv_text)      # parse text already in memory
+
+df.shape          # (3, 4) — (rows, columns)
+len(df)           # 3 — rows
+df.columns        # ('name', 'age', 'score', 'city')
+df.dtypes         # (string, int, float, string)
+"age" in df       # True
+list(df)          # column names, the way pandas iterates
+
+column = df["age"]   # by name; df[1] works too, negatives included
+column.name          # 'age'
+column.dtype         # ColumnType.INT
+column[0]            # 36 — read straight out of the Zig buffer
+column[-1]           # 29
+column[1:]           # [45, 29]
+list(column)         # 36, 45, 29 — lazily, one value at a time
+column.to_list()     # [36, 45, 29]
+
+df.row(0)         # ('ada', 36, 91.5, 'London')
+df.head(2)        # the first two rows as tuples
 ```
+
+Errors arrive as ordinary Python exceptions: `FileNotFoundError` for a missing
+path, `ParseError` (a `ValueError`) for malformed CSV.
+
+### Memory
+
+A `DataFrame` owns memory on the Zig side. It is released when the frame is
+garbage collected, or you can be explicit:
+
+```python
+with euspinolia.read_csv("people.csv") as df:
+    ...   # freed on the way out; df.close() does the same thing
+```
+
+Numeric columns are read through the Zig buffer rather than copied out of it,
+so `df["age"][0]` costs an array index and no allocation. A `Column` keeps its
+frame alive, so it never outlives the memory it points at — reading either one
+after `close()` raises `ValueError` instead of touching freed memory.
 
 ## CSV support
 
@@ -67,34 +115,48 @@ reads:
   nothing but a repeated offset.
 
 A filter or an aggregate then walks one contiguous array instead of hopping
-between per-row allocations, and Phase 3 can hand Python a column as a flat
-buffer without copying. A `DataFrame` owns its data in its own arena, so the
-`Table` it came from can be freed immediately.
+between per-row allocations, and Python reads a column as a flat buffer without
+copying. A `DataFrame` owns its data in its own arena, so the `Table` it came
+from can be freed immediately.
+
+## Crossing into Python
+
+`src/ffi.zig` is the whole C ABI surface, and it keeps three rules:
+
+- A frame crosses as an opaque pointer, created by `eus_read_csv` and released
+  by `eus_frame_free`. Nothing else owns it.
+- Zig error sets do not survive the C ABI, so fallible functions return an
+  `i32` status and write their result through an out-parameter. The mapping
+  from Zig errors to status codes happens once, in one place.
+- Column data is handed out as borrowed pointers into the frame's arena. They
+  are valid until the frame is freed, and the caller must not write to them.
 
 ## Tests
 
 ```sh
 zig build test                              # Zig unit tests
-python3 -m unittest discover -s tests -v    # Python-side FFI tests
+python3 -m unittest discover -s tests -v    # Python-side tests
 ```
 
 ## Layout
 
 ```
 build.zig               shared library build definition
-src/root.zig            exported C ABI surface; symbols are prefixed with `eus_`
+src/root.zig            module roots and the bridge smoke-test exports
 src/csv.zig             CSV scanner and the row-major Table
 src/dtype.zig           column type inference
 src/frame.zig           columnar DataFrame and the conversion into it
+src/ffi.zig             the C ABI; every symbol is prefixed with `eus_`
 euspinolia/_ffi.py      library discovery, loading, ctypes signatures
-euspinolia/__init__.py  Pythonic wrapper layer
+euspinolia/__init__.py  DataFrame, Column, read_csv
 tests/test_ffi.py       bridge tests
+tests/test_frame.py     read_csv, indexing, memory ownership
 ```
 
 The library is looked up under `zig-out/lib/` by default; set `EUSPINOLIA_LIB`
 to override the path.
 
-## Target architecture
+## Architecture
 
 ```
 [Python]  df = euspinolia.read_csv("data.csv")
@@ -103,11 +165,14 @@ to override the path.
 [Zig]     CSV parser → columnar buffer (one typed array per column)
               │
               ▼
-          filter / groupby / aggregate → columnar buffer again
-              │  pointer + shape info
+          filter / groupby / aggregate → columnar buffer again    (not yet)
+              │  borrowed pointer + shape info
               ▼
-[Python]  df.head(), df["column"], df.to_list()
+[Python]  df["column"], df.head(), df.shape
 ```
+
+Every step but the marked one works today; filtering and aggregation are the
+next phases.
 
 The scope is deliberately narrow: multi-index, date/time types, NaN semantics,
 join/merge and pivot tables are out. The goal is not a real table engine but a
