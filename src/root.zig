@@ -1,14 +1,22 @@
 //! euspinolia core.
 //!
-//! Phase 0: no data structures yet — these exports only prove that Python can
-//! load the library and call across the C ABI. Every exported symbol is
-//! prefixed with `eus_`.
+//! The library layer lives in `csv`, `dtype` and `frame`; `ffi` exposes it
+//! across the C ABI. The handful of exports here are the original bridge
+//! smoke-tests, kept because `self_check` still uses them to catch a stale
+//! library. Every exported symbol is prefixed with `eus_`.
 
 const std = @import("std");
 
 pub const csv = @import("csv.zig");
 pub const dtype = @import("dtype.zig");
 pub const frame = @import("frame.zig");
+pub const ffi = @import("ffi.zig");
+
+comptime {
+    // The exports live in `ffi`; reference it so they are analysed and land in
+    // the shared library.
+    _ = ffi;
+}
 
 const version_string: [:0]const u8 = "0.0.1";
 
