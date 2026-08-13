@@ -51,6 +51,10 @@ class Status(enum.IntEnum):
     INCONSISTENT_FIELD_COUNT = 9
     MISSING_HEADER = 10
     INVALID_NUMBER = 11
+    COLUMN_OUT_OF_RANGE = 12
+    NOT_NUMERIC = 13
+    EMPTY_COLUMN = 14
+    SUM_OVERFLOW = 15
     UNKNOWN = 99
 
 
@@ -63,6 +67,10 @@ _STATUS_EXCEPTIONS: dict[int, type[Exception]] = {
     Status.IS_A_DIRECTORY: IsADirectoryError,
     Status.IO_FAILED: OSError,
     Status.FILE_TOO_LARGE: OSError,
+    Status.COLUMN_OUT_OF_RANGE: IndexError,
+    Status.NOT_NUMERIC: TypeError,
+    Status.EMPTY_COLUMN: ValueError,
+    Status.SUM_OVERFLOW: OverflowError,
 }
 
 
@@ -172,6 +180,25 @@ def _declare_signatures(lib: ctypes.CDLL) -> None:
         ctypes.POINTER(ctypes.c_size_t),
     ]
     lib.eus_frame_string_data.restype = ctypes.c_void_p
+
+    # Reductions keep the column's type, so they write through whichever
+    # out-parameter matches it — the caller knows which one to read.
+    for name in ("eus_column_sum", "eus_column_min", "eus_column_max"):
+        function = getattr(lib, name)
+        function.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_size_t,
+            ctypes.POINTER(ctypes.c_int64),
+            ctypes.POINTER(ctypes.c_double),
+        ]
+        function.restype = ctypes.c_int32
+
+    lib.eus_column_mean.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_size_t,
+        ctypes.POINTER(ctypes.c_double),
+    ]
+    lib.eus_column_mean.restype = ctypes.c_int32
 
 
 lib = _load()

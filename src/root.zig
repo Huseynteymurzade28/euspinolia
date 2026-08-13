@@ -10,6 +10,7 @@ const std = @import("std");
 pub const csv = @import("csv.zig");
 pub const dtype = @import("dtype.zig");
 pub const frame = @import("frame.zig");
+pub const agg = @import("agg.zig");
 pub const ffi = @import("ffi.zig");
 
 comptime {

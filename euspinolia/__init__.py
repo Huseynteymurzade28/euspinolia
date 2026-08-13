@@ -134,6 +134,39 @@ class Column:
             return [self._value(i) for i in range(len(self))]
         return list(self._values)
 
+    def sum(self) -> int | float:
+        """The total, computed in Zig. Integer columns stay exact."""
+        return self._reduce(lib.eus_column_sum)
+
+    def min(self) -> int | float:
+        """The smallest value. Raises `ValueError` on an empty column."""
+        return self._reduce(lib.eus_column_min)
+
+    def max(self) -> int | float:
+        """The largest value. Raises `ValueError` on an empty column."""
+        return self._reduce(lib.eus_column_max)
+
+    def mean(self) -> float:
+        """The arithmetic mean, always a float."""
+        handle = self._frame._require_open()
+        result = ctypes.c_double()
+        check(lib.eus_column_mean(handle, self._index, ctypes.byref(result)), source=self._name)
+        return result.value
+
+    def _reduce(self, function: Any) -> int | float:
+        """Run a reduction that keeps the column's type.
+
+        Zig writes the answer to whichever out-parameter matches the column,
+        so an integer total never rounds through a float on the way back.
+        """
+        handle = self._frame._require_open()
+        as_int, as_float = ctypes.c_int64(), ctypes.c_double()
+        check(
+            function(handle, self._index, ctypes.byref(as_int), ctypes.byref(as_float)),
+            source=self._name,
+        )
+        return as_int.value if self._dtype is ColumnType.INT else as_float.value
+
     def _value(self, row: int) -> Any:
         # `self._frame` guarantees the buffers outlive us, so this stays a
         # bounds-checked read rather than a use-after-free.

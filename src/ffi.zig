@@ -16,6 +16,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+const agg = @import("agg.zig");
 const csv = @import("csv.zig");
 const dtype = @import("dtype.zig");
 const frame = @import("frame.zig");
@@ -45,6 +46,10 @@ pub const Status = enum(i32) {
     inconsistent_field_count = 9,
     missing_header = 10,
     invalid_number = 11,
+    column_out_of_range = 12,
+    not_numeric = 13,
+    empty_column = 14,
+    sum_overflow = 15,
     unknown = 99,
 
     fn message(self: Status) [:0]const u8 {
@@ -61,6 +66,10 @@ pub const Status = enum(i32) {
             .inconsistent_field_count => "a record has a different field count than the header",
             .missing_header => "the input has no header record",
             .invalid_number => "a cell did not parse as the type inferred for its column",
+            .column_out_of_range => "no column at that position",
+            .not_numeric => "this operation needs a numeric column",
+            .empty_column => "a column with no rows has no value here",
+            .sum_overflow => "the sum left the range of a 64-bit integer",
             .unknown => "unknown error",
         };
     }
@@ -78,6 +87,9 @@ fn statusFor(err: anyerror) Status {
         error.InconsistentFieldCount => .inconsistent_field_count,
         error.MissingHeader => .missing_header,
         error.InvalidNumber => .invalid_number,
+        error.NotNumeric => .not_numeric,
+        error.EmptyColumn => .empty_column,
+        error.SumOverflow => .sum_overflow,
         // Everything left is some flavour of read failure. Collapsing it keeps
         // the ABI small; the distinctions are not actionable from Python.
         else => .io_failed,
@@ -223,6 +235,64 @@ export fn eus_frame_string_data(
     return column.data.ptr;
 }
 
+/// Reductions keep the column's type, so `sum`, `min` and `max` write through
+/// whichever out-parameter matches it. The caller already knows the type from
+/// `eus_frame_column_type`, and this keeps integer results exact instead of
+/// rounding them through `f64`.
+fn reduce(
+    handle: *const DataFrame,
+    index: usize,
+    comptime operation: fn (frame.Column) agg.AggError!agg.Value,
+    out_int: *i64,
+    out_float: *f64,
+) i32 {
+    if (index >= handle.columnCount()) return @intFromEnum(Status.column_out_of_range);
+
+    const value = operation(handle.column(index)) catch |err|
+        return @intFromEnum(statusFor(err));
+
+    switch (value) {
+        .int => |v| out_int.* = v,
+        .float => |v| out_float.* = v,
+    }
+    return @intFromEnum(Status.ok);
+}
+
+export fn eus_column_sum(
+    handle: *const DataFrame,
+    index: usize,
+    out_int: *i64,
+    out_float: *f64,
+) i32 {
+    return reduce(handle, index, agg.sum, out_int, out_float);
+}
+
+export fn eus_column_min(
+    handle: *const DataFrame,
+    index: usize,
+    out_int: *i64,
+    out_float: *f64,
+) i32 {
+    return reduce(handle, index, agg.min, out_int, out_float);
+}
+
+export fn eus_column_max(
+    handle: *const DataFrame,
+    index: usize,
+    out_int: *i64,
+    out_float: *f64,
+) i32 {
+    return reduce(handle, index, agg.max, out_int, out_float);
+}
+
+/// The mean is always a float, whatever the column holds.
+export fn eus_column_mean(handle: *const DataFrame, index: usize, out: *f64) i32 {
+    if (index >= handle.columnCount()) return @intFromEnum(Status.column_out_of_range);
+
+    out.* = agg.mean(handle.column(index)) catch |err| return @intFromEnum(statusFor(err));
+    return @intFromEnum(Status.ok);
+}
+
 const testing = std.testing;
 
 /// Mirrors what the Python layer does: parse, then read back through the ABI.
@@ -325,6 +395,48 @@ test "a missing file reports file_not_found" {
 
     try testing.expectEqual(@intFromEnum(Status.file_not_found), code);
     try testing.expect(handle == null);
+}
+
+test "reductions cross the boundary in the column's own type" {
+    const df = try parseForTest("n,x\n3,0.5\n-1,2.5\n");
+    defer eus_frame_free(df);
+
+    var as_int: i64 = 0;
+    var as_float: f64 = 0;
+
+    try testing.expectEqual(@as(i32, 0), eus_column_sum(df, 0, &as_int, &as_float));
+    try testing.expectEqual(@as(i64, 2), as_int);
+
+    try testing.expectEqual(@as(i32, 0), eus_column_min(df, 0, &as_int, &as_float));
+    try testing.expectEqual(@as(i64, -1), as_int);
+
+    try testing.expectEqual(@as(i32, 0), eus_column_max(df, 1, &as_int, &as_float));
+    try testing.expectEqual(@as(f64, 2.5), as_float);
+
+    try testing.expectEqual(@as(i32, 0), eus_column_mean(df, 1, &as_float));
+    try testing.expectEqual(@as(f64, 1.5), as_float);
+}
+
+test "reductions report the reason they cannot run" {
+    const df = try parseForTest("s\nada\n");
+    defer eus_frame_free(df);
+
+    var as_int: i64 = 0;
+    var as_float: f64 = 0;
+
+    try testing.expectEqual(
+        @intFromEnum(Status.not_numeric),
+        eus_column_sum(df, 0, &as_int, &as_float),
+    );
+    try testing.expectEqual(
+        @intFromEnum(Status.column_out_of_range),
+        eus_column_min(df, 9, &as_int, &as_float),
+    );
+    try testing.expectEqual(
+        @intFromEnum(Status.column_out_of_range),
+        eus_column_mean(df, 9, &as_float),
+    );
+    try testing.expectEqual(@intFromEnum(Status.not_numeric), eus_column_mean(df, 0, &as_float));
 }
 
 test "column type tags are the numbers Python expects" {

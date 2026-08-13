@@ -131,6 +131,75 @@ class TestColumnAccess(unittest.TestCase):
         self.assertEqual(df["city"].to_list(), ["İstanbul", "İzmir"])
 
 
+class TestAggregates(unittest.TestCase):
+    def setUp(self):
+        self.df = euspinolia.parse_csv(SAMPLE)
+
+    def test_integer_column(self):
+        age = self.df["age"]
+        self.assertEqual(age.sum(), 110)
+        self.assertEqual(age.min(), 29)
+        self.assertEqual(age.max(), 45)
+        self.assertAlmostEqual(age.mean(), 110 / 3)
+
+    def test_float_column(self):
+        score = self.df["score"]
+        self.assertAlmostEqual(score.sum(), 252.75)
+        self.assertEqual(score.min(), 73.25)
+        self.assertEqual(score.max(), 91.5)
+        self.assertAlmostEqual(score.mean(), 84.25)
+
+    def test_integer_results_stay_integers(self):
+        self.assertIsInstance(self.df["age"].sum(), int)
+        self.assertIsInstance(self.df["age"].min(), int)
+        self.assertIsInstance(self.df["score"].sum(), float)
+
+    def test_mean_is_always_a_float(self):
+        self.assertIsInstance(self.df["age"].mean(), float)
+
+    def test_matches_python(self):
+        values = self.df["score"].to_list()
+        self.assertAlmostEqual(self.df["score"].sum(), sum(values))
+        self.assertEqual(self.df["score"].min(), min(values))
+        self.assertEqual(self.df["score"].max(), max(values))
+
+    def test_large_integers_stay_exact(self):
+        # Beyond 2**53 a float round trip would lose the last digits.
+        big = 2**60 + 1
+        df = euspinolia.parse_csv(f"n\n{big}\n{big}\n")
+        self.assertEqual(df["n"].sum(), 2 * big)
+
+    def test_sum_beyond_i64_raises(self):
+        limit = 2**63 - 1
+        df = euspinolia.parse_csv(f"n\n{limit}\n1\n")
+        with self.assertRaises(OverflowError):
+            df["n"].sum()
+
+    def test_mean_survives_a_total_that_would_not(self):
+        limit = 2**63 - 1
+        df = euspinolia.parse_csv(f"n\n{limit}\n{limit}\n")
+        self.assertAlmostEqual(df["n"].mean(), float(limit))
+
+    def test_string_column_refuses(self):
+        for reduction in ("sum", "min", "max", "mean"):
+            with self.subTest(reduction=reduction):
+                with self.assertRaises(TypeError):
+                    getattr(self.df["name"], reduction)()
+
+    def test_empty_column_has_no_extremes(self):
+        df = euspinolia.parse_csv("n\n")
+        # A header-only file infers as string, so this reports the type first.
+        with self.assertRaises(TypeError):
+            df["n"].mean()
+
+    def test_reductions_need_an_open_frame(self):
+        df = euspinolia.parse_csv("n\n1\n")
+        column = df["n"]
+        df.close()
+        with self.assertRaises(ValueError):
+            column.sum()
+
+
 class TestZeroCopy(unittest.TestCase):
     def test_numeric_columns_are_views_not_copies(self):
         df = euspinolia.parse_csv("n\n1\n2\n")

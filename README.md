@@ -23,9 +23,9 @@ The name comes from *Euspinolia*, the genus of the velvet ant known as the
 
 ## Status
 
-**Phase 3 — reading and indexing from Python.** Reading a CSV, inspecting its
-shape and pulling out columns all work. Filtering and aggregation (Phase 4) and
-`groupby` (Phase 5) are next; see `roadmap.md`.
+**Phase 4, half done.** Reading a CSV, inspecting its shape, pulling out
+columns and reducing them (`sum`, `mean`, `min`, `max`) all work. Filtering is
+the other half of Phase 4; `groupby` is Phase 5. See `roadmap.md`.
 
 ## Requirements
 
@@ -70,7 +70,17 @@ column.to_list()     # [36, 45, 29]
 
 df.row(0)         # ('ada', 36, 91.5, 'London')
 df.head(2)        # the first two rows as tuples
+
+column.sum()      # 195 — reduced in Zig, over the contiguous array
+column.mean()     # 39.0 — always a float
+column.min()      # 29
+column.max()      # 54
 ```
+
+Reductions keep the column's type: an integer column sums to an `int`, exactly,
+without rounding through a float. A total that leaves the `i64` range raises
+`OverflowError` rather than wrapping, and asking a text column for arithmetic
+raises `TypeError`.
 
 Errors arrive as ordinary Python exceptions: `FileNotFoundError` for a missing
 path, `ParseError` (a `ValueError`) for malformed CSV.
@@ -104,6 +114,18 @@ runs, against Python's standard `csv` module:
 So roughly **3x** for the same job, and the gap is not the parsing alone: the
 `csv` module already pays for a Python tuple per row before any conversion,
 while euspinolia hands back typed columns Python never has to materialise.
+
+Reductions are where the columnar layout really pays. Summing a 500,000-row
+integer column:
+
+| | time |
+|---|---|
+| `column.sum()` | 0.5 ms |
+| `sum(column)` — Python looping over the same buffer | 50 ms |
+| `sum(column.to_list())` — copy out first | 37 ms |
+
+About **96x**, because Zig walks one flat `[]i64` while Python boxes half a
+million integers to add them up.
 
 A proper benchmark against pandas is Phase 6; treat these as a sanity check
 that the Zig side is pulling its weight, not as a published result.
@@ -169,11 +191,12 @@ src/root.zig            module roots and the bridge smoke-test exports
 src/csv.zig             CSV scanner and the row-major Table
 src/dtype.zig           column type inference
 src/frame.zig           columnar DataFrame and the conversion into it
+src/agg.zig             reductions over a single column
 src/ffi.zig             the C ABI; every symbol is prefixed with `eus_`
 euspinolia/_ffi.py      library discovery, loading, ctypes signatures
 euspinolia/__init__.py  DataFrame, Column, read_csv
 tests/test_ffi.py       bridge tests
-tests/test_frame.py     read_csv, indexing, memory ownership
+tests/test_frame.py     read_csv, indexing, reductions, memory ownership
 ```
 
 The library is looked up under `zig-out/lib/` by default; set `EUSPINOLIA_LIB`
@@ -188,7 +211,7 @@ to override the path.
 [Zig]     CSV parser → columnar buffer (one typed array per column)
               │
               ▼
-          filter / groupby / aggregate → columnar buffer again    (not yet)
+          aggregate → a value;  filter / groupby → a frame     (filter: not yet)
               │  borrowed pointer + shape info
               ▼
 [Python]  df["column"], df.head(), df.shape
