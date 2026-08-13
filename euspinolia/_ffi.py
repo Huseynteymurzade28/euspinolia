@@ -3,17 +3,79 @@
 from __future__ import annotations
 
 import ctypes
+import enum
 import os
 import sys
 from pathlib import Path
 
 # Must stay in sync with src/root.zig.
-EXPECTED_VERSION = "0.0.1"
+EXPECTED_VERSION = "0.1.0"
 EXPECTED_MAGIC = 0xE05
 
 
 class LibraryNotFoundError(RuntimeError):
     """The shared library was not found in any search path."""
+
+
+class ParseError(ValueError):
+    """The input is not CSV this library can read."""
+
+
+class ColumnType(enum.IntEnum):
+    """Element type of a column.
+
+    The values are the `dtype.ColumnType` tag numbers and are part of the ABI;
+    src/ffi.zig has a test pinning them.
+    """
+
+    INT = 0
+    FLOAT = 1
+    STRING = 2
+
+    def __str__(self) -> str:
+        return self.name.lower()
+
+
+class Status(enum.IntEnum):
+    """Status codes returned by the fallible C functions. See src/ffi.zig."""
+
+    OK = 0
+    OUT_OF_MEMORY = 1
+    FILE_NOT_FOUND = 2
+    ACCESS_DENIED = 3
+    IS_A_DIRECTORY = 4
+    IO_FAILED = 5
+    FILE_TOO_LARGE = 6
+    UNTERMINATED_QUOTE = 7
+    UNEXPECTED_CHARACTER_AFTER_QUOTE = 8
+    INCONSISTENT_FIELD_COUNT = 9
+    MISSING_HEADER = 10
+    INVALID_NUMBER = 11
+    UNKNOWN = 99
+
+
+# Which Python exception each status deserves. Anything absent is a ParseError:
+# the remaining codes all describe malformed input.
+_STATUS_EXCEPTIONS: dict[int, type[Exception]] = {
+    Status.OUT_OF_MEMORY: MemoryError,
+    Status.FILE_NOT_FOUND: FileNotFoundError,
+    Status.ACCESS_DENIED: PermissionError,
+    Status.IS_A_DIRECTORY: IsADirectoryError,
+    Status.IO_FAILED: OSError,
+    Status.FILE_TOO_LARGE: OSError,
+}
+
+
+def check(code: int, source: str | None = None) -> None:
+    """Raise the Python exception matching a status code. `Status.OK` is a no-op."""
+    if code == Status.OK:
+        return
+
+    message = lib.eus_status_message(code).decode("utf-8")
+    if source is not None:
+        message = f"{message}: {source}"
+
+    raise _STATUS_EXCEPTIONS.get(code, ParseError)(message)
 
 
 def _library_filename() -> str:
@@ -63,6 +125,53 @@ def _declare_signatures(lib: ctypes.CDLL) -> None:
 
     lib.eus_version.argtypes = []
     lib.eus_version.restype = ctypes.c_char_p
+
+    lib.eus_status_message.argtypes = [ctypes.c_int32]
+    lib.eus_status_message.restype = ctypes.c_char_p
+
+    # Frames cross as opaque pointers; the result comes back through an
+    # out-parameter so the return value can stay a status code.
+    lib.eus_read_csv.argtypes = [ctypes.c_char_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p)]
+    lib.eus_read_csv.restype = ctypes.c_int32
+
+    lib.eus_parse_csv.argtypes = [ctypes.c_char_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p)]
+    lib.eus_parse_csv.restype = ctypes.c_int32
+
+    lib.eus_frame_free.argtypes = [ctypes.c_void_p]
+    lib.eus_frame_free.restype = None
+
+    lib.eus_frame_rows.argtypes = [ctypes.c_void_p]
+    lib.eus_frame_rows.restype = ctypes.c_size_t
+
+    lib.eus_frame_columns.argtypes = [ctypes.c_void_p]
+    lib.eus_frame_columns.restype = ctypes.c_size_t
+
+    lib.eus_frame_column_type.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
+    lib.eus_frame_column_type.restype = ctypes.c_int32
+
+    lib.eus_frame_column_name.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_size_t,
+        ctypes.POINTER(ctypes.c_size_t),
+    ]
+    lib.eus_frame_column_name.restype = ctypes.c_void_p
+
+    lib.eus_frame_column_index.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_size_t]
+    lib.eus_frame_column_index.restype = ctypes.c_ssize_t
+
+    # Borrowed pointers into the frame's arena. Declared as void* so the
+    # address arrives as a plain int, which is what ctypes array views want.
+    for name in ("eus_frame_ints", "eus_frame_floats", "eus_frame_string_offsets"):
+        function = getattr(lib, name)
+        function.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
+        function.restype = ctypes.c_void_p
+
+    lib.eus_frame_string_data.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_size_t,
+        ctypes.POINTER(ctypes.c_size_t),
+    ]
+    lib.eus_frame_string_data.restype = ctypes.c_void_p
 
 
 lib = _load()
