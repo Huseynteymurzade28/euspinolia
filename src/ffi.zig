@@ -4,8 +4,9 @@
 //!
 //! - Every symbol is prefixed with `eus_`.
 //! - A `DataFrame` crosses the boundary as an opaque pointer. It is created by
-//!   `eus_read_csv` / `eus_parse_csv` / `eus_frame_filter_*` and must be
-//!   released with `eus_frame_free`; nothing else owns it.
+//!   `eus_read_csv` / `eus_parse_csv` / `eus_frame_filter_*` /
+//!   `eus_frame_groupby` and must be released with `eus_frame_free`; nothing
+//!   else owns it.
 //! - Functions that can fail return an `i32` status (`Status`) and write their
 //!   result through an out-parameter. Zig error sets do not survive the C ABI,
 //!   so every error is mapped to a status code once, here.
@@ -21,6 +22,7 @@ const csv = @import("csv.zig");
 const dtype = @import("dtype.zig");
 const filter = @import("filter.zig");
 const frame = @import("frame.zig");
+const groupby = @import("groupby.zig");
 
 const DataFrame = frame.DataFrame;
 
@@ -53,6 +55,7 @@ pub const Status = enum(i32) {
     sum_overflow = 15,
     type_mismatch = 16,
     invalid_operator = 17,
+    invalid_aggregate = 18,
     unknown = 99,
 
     fn message(self: Status) [:0]const u8 {
@@ -75,6 +78,7 @@ pub const Status = enum(i32) {
             .sum_overflow => "the sum left the range of a 64-bit integer",
             .type_mismatch => "cannot compare text with a number",
             .invalid_operator => "unknown comparison operator",
+            .invalid_aggregate => "unknown aggregate function",
             .unknown => "unknown error",
         };
     }
@@ -352,6 +356,41 @@ export fn eus_frame_filter_string(
     return filterInto(handle, index, op, .{ .string = value_ptr[0..value_len] }, out_frame);
 }
 
+/// Groups by column `key` and reduces `spec_count` columns per group, one
+/// output column per `(columns[i], funcs[i])` pair; `funcs` are `groupby.Func`
+/// tags. The result is a new frame — see `groupby.groupBy` for its shape —
+/// independent of `handle`, released with `eus_frame_free`. On failure
+/// `out_frame` is left untouched.
+export fn eus_frame_groupby(
+    handle: *const DataFrame,
+    key: usize,
+    columns: [*]const usize,
+    funcs: [*]const u8,
+    spec_count: usize,
+    out_frame: *?*DataFrame,
+) i32 {
+    if (key >= handle.columnCount()) return @intFromEnum(Status.column_out_of_range);
+
+    const gpa = allocator();
+    const specs = gpa.alloc(groupby.Spec, spec_count) catch
+        return @intFromEnum(Status.out_of_memory);
+    defer gpa.free(specs);
+
+    for (specs, columns[0..spec_count], funcs[0..spec_count]) |*spec, column, func| {
+        if (column >= handle.columnCount()) return @intFromEnum(Status.column_out_of_range);
+        spec.* = .{
+            .column = column,
+            .func = std.enums.fromInt(groupby.Func, func) orelse
+                return @intFromEnum(Status.invalid_aggregate),
+        };
+    }
+
+    const grouped = groupby.groupBy(gpa, handle.*, key, specs) catch |err|
+        return @intFromEnum(statusFor(err));
+
+    return publish(gpa, grouped, out_frame);
+}
+
 const testing = std.testing;
 
 /// Mirrors what the Python layer does: parse, then read back through the ABI.
@@ -558,6 +597,77 @@ test "filter failures come back as status codes" {
         eus_frame_filter_string(df, 0, eq, "1", 1, &handle),
     );
     try testing.expect(handle == null);
+}
+
+test "groupby crosses the boundary as a new, independent frame" {
+    const df = try parseForTest("city,n\nparis,1\nrome,2\nparis,3\n");
+
+    var handle: ?*DataFrame = null;
+    const columns = [_]usize{ 1, 1 };
+    const funcs = [_]u8{ @intFromEnum(groupby.Func.sum), @intFromEnum(groupby.Func.count) };
+    try testing.expectEqual(
+        @as(i32, 0),
+        eus_frame_groupby(df, 0, &columns, &funcs, columns.len, &handle),
+    );
+    const grouped = handle.?;
+    defer eus_frame_free(grouped);
+
+    eus_frame_free(df);
+
+    try testing.expectEqual(@as(usize, 2), eus_frame_rows(grouped));
+    try testing.expectEqual(@as(usize, 3), eus_frame_columns(grouped));
+    try testing.expectEqualSlices(i64, &.{ 4, 2 }, eus_frame_ints(grouped, 1).?[0..2]);
+    try testing.expectEqualSlices(i64, &.{ 2, 1 }, eus_frame_ints(grouped, 2).?[0..2]);
+
+    var len: usize = 0;
+    const name = eus_frame_column_name(grouped, 2, &len).?;
+    try testing.expectEqualStrings("count", name[0..len]);
+}
+
+test "groupby with no specs is allowed and the pointers are never read" {
+    const df = try parseForTest("k\na\nb\na\n");
+    defer eus_frame_free(df);
+
+    var handle: ?*DataFrame = null;
+    try testing.expectEqual(@as(i32, 0), eus_frame_groupby(df, 0, undefined, undefined, 0, &handle));
+    defer eus_frame_free(handle);
+    try testing.expectEqual(@as(usize, 2), eus_frame_rows(handle.?));
+    try testing.expectEqual(@as(usize, 1), eus_frame_columns(handle.?));
+}
+
+test "groupby failures come back as status codes" {
+    const df = try parseForTest("k,s\na,x\n");
+    defer eus_frame_free(df);
+
+    var handle: ?*DataFrame = null;
+    const sum: u8 = @intFromEnum(groupby.Func.sum);
+
+    try testing.expectEqual(
+        @intFromEnum(Status.column_out_of_range),
+        eus_frame_groupby(df, 9, &[_]usize{0}, &[_]u8{sum}, 1, &handle),
+    );
+    try testing.expectEqual(
+        @intFromEnum(Status.column_out_of_range),
+        eus_frame_groupby(df, 0, &[_]usize{9}, &[_]u8{sum}, 1, &handle),
+    );
+    try testing.expectEqual(
+        @intFromEnum(Status.invalid_aggregate),
+        eus_frame_groupby(df, 0, &[_]usize{1}, &[_]u8{42}, 1, &handle),
+    );
+    try testing.expectEqual(
+        @intFromEnum(Status.not_numeric),
+        eus_frame_groupby(df, 0, &[_]usize{1}, &[_]u8{sum}, 1, &handle),
+    );
+    try testing.expect(handle == null);
+}
+
+test "aggregate tags are the numbers Python expects" {
+    // euspinolia/__init__.py hardcodes these in `_AGGREGATES`.
+    try testing.expectEqual(@as(u8, 0), @intFromEnum(groupby.Func.sum));
+    try testing.expectEqual(@as(u8, 1), @intFromEnum(groupby.Func.mean));
+    try testing.expectEqual(@as(u8, 2), @intFromEnum(groupby.Func.min));
+    try testing.expectEqual(@as(u8, 3), @intFromEnum(groupby.Func.max));
+    try testing.expectEqual(@as(u8, 4), @intFromEnum(groupby.Func.count));
 }
 
 test "operator tags are the numbers Python expects" {
