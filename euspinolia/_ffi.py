@@ -55,6 +55,8 @@ class Status(enum.IntEnum):
     NOT_NUMERIC = 13
     EMPTY_COLUMN = 14
     SUM_OVERFLOW = 15
+    TYPE_MISMATCH = 16
+    INVALID_OPERATOR = 17
     UNKNOWN = 99
 
 
@@ -71,6 +73,8 @@ _STATUS_EXCEPTIONS: dict[int, type[Exception]] = {
     Status.NOT_NUMERIC: TypeError,
     Status.EMPTY_COLUMN: ValueError,
     Status.SUM_OVERFLOW: OverflowError,
+    Status.TYPE_MISMATCH: TypeError,
+    Status.INVALID_OPERATOR: ValueError,
 }
 
 
@@ -199,6 +203,37 @@ def _declare_signatures(lib: ctypes.CDLL) -> None:
         ctypes.POINTER(ctypes.c_double),
     ]
     lib.eus_column_mean.restype = ctypes.c_int32
+
+    # Filters produce a new frame, delivered the same way parsing does. One
+    # entry point per value type, so no argument has to be a union.
+    frame_out = ctypes.POINTER(ctypes.c_void_p)
+    lib.eus_frame_filter_int.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_size_t,
+        ctypes.c_uint8,
+        ctypes.c_int64,
+        frame_out,
+    ]
+    lib.eus_frame_filter_int.restype = ctypes.c_int32
+
+    lib.eus_frame_filter_float.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_size_t,
+        ctypes.c_uint8,
+        ctypes.c_double,
+        frame_out,
+    ]
+    lib.eus_frame_filter_float.restype = ctypes.c_int32
+
+    lib.eus_frame_filter_string.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_size_t,
+        ctypes.c_uint8,
+        ctypes.c_char_p,
+        ctypes.c_size_t,
+        frame_out,
+    ]
+    lib.eus_frame_filter_string.restype = ctypes.c_int32
 
 
 lib = _load()

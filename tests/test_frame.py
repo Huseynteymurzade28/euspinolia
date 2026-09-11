@@ -1,4 +1,4 @@
-"""Phase 3 tests: reading CSV into a DataFrame from Python.
+"""Phase 3-4 tests: reading CSV into a DataFrame from Python, and working on it.
 
 Run from the repo root:
     zig build && python3 -m unittest discover -s tests -v
@@ -198,6 +198,171 @@ class TestAggregates(unittest.TestCase):
         df.close()
         with self.assertRaises(ValueError):
             column.sum()
+
+
+class TestFilter(unittest.TestCase):
+    def setUp(self):
+        self.df = euspinolia.parse_csv(SAMPLE)
+
+    def test_filter_returns_a_new_frame(self):
+        adults = self.df.filter("age", ">", 30)
+        self.assertIsInstance(adults, euspinolia.DataFrame)
+        self.assertEqual(adults.shape, (2, 3))
+        self.assertEqual(adults["name"].to_list(), ["ada", "grace"])
+        self.assertEqual(adults["age"].to_list(), [36, 45])
+        self.assertEqual(adults["score"].to_list(), [91.5, 88.0])
+        # The source is untouched.
+        self.assertEqual(self.df.shape, (3, 3))
+
+    def test_every_operator(self):
+        cases = {
+            "==": [36],
+            "!=": [45, 29],
+            "<": [29],
+            "<=": [36, 29],
+            ">": [45],
+            ">=": [36, 45],
+        }
+        for op, expected in cases.items():
+            with self.subTest(op=op):
+                self.assertEqual(self.df.filter("age", op, 36)["age"].to_list(), expected)
+
+    def test_by_column_position(self):
+        self.assertEqual(self.df.filter(1, ">", 30).shape, (2, 3))
+
+    def test_float_column(self):
+        self.assertEqual(self.df.filter("score", "<", 90.0)["name"].to_list(), ["grace", "Doe, John"])
+
+    def test_string_column(self):
+        self.assertEqual(self.df.filter("name", "==", "grace")["age"].to_list(), [45])
+        self.assertEqual(self.df.filter("name", "<", "b")["name"].to_list(), ["ada", "Doe, John"])
+
+    def test_numbers_compare_across_int_and_float(self):
+        self.assertEqual(self.df.filter("age", ">", 35.5)["age"].to_list(), [36, 45])
+        self.assertEqual(self.df.filter("score", "==", 88)["name"].to_list(), ["grace"])
+
+    def test_nothing_matching_keeps_the_types(self):
+        empty = self.df.filter("age", ">", 100)
+        self.assertEqual(empty.shape, (0, 3))
+        self.assertEqual(empty.dtypes, self.df.dtypes)
+        self.assertEqual(empty["age"].to_list(), [])
+        self.assertEqual(empty.head(), [])
+
+    def test_everything_matching_is_still_a_copy(self):
+        everything = self.df.filter("age", ">", 0)
+        self.assertIsNot(everything, self.df)
+        self.assertEqual(everything["name"].to_list(), self.df["name"].to_list())
+
+    def test_result_outlives_the_source(self):
+        adults = self.df.filter("age", ">", 30)
+        self.df.close()
+        gc.collect()
+        self.assertEqual(adults["name"].to_list(), ["ada", "grace"])
+
+    def test_result_can_be_filtered_again(self):
+        narrowed = self.df.filter("age", ">", 30).filter("score", "<", 90)
+        self.assertEqual(narrowed["name"].to_list(), ["grace"])
+
+    def test_unicode_value(self):
+        df = euspinolia.parse_csv("city\nİstanbul\nİzmir\n")
+        self.assertEqual(df.filter("city", "==", "İzmir")["city"].to_list(), ["İzmir"])
+
+    def test_text_against_number_raises(self):
+        with self.assertRaises(TypeError):
+            self.df.filter("name", ">", 3)
+        with self.assertRaises(TypeError):
+            self.df.filter("age", "==", "36")
+
+    def test_unsupported_value_types_raise(self):
+        with self.assertRaises(TypeError):
+            self.df.filter("age", "==", None)
+        # There is no bool column type, so this is almost certainly a mistake.
+        with self.assertRaises(TypeError):
+            self.df.filter("age", "==", True)
+
+    def test_unknown_operator_raises(self):
+        with self.assertRaises(ValueError):
+            self.df.filter("age", "=", 36)
+
+    def test_unknown_column_raises(self):
+        with self.assertRaises(KeyError):
+            self.df.filter("missing", "==", 1)
+        with self.assertRaises(IndexError):
+            self.df.filter(9, "==", 1)
+
+    def test_needs_an_open_frame(self):
+        self.df.close()
+        with self.assertRaises(ValueError):
+            self.df.filter("age", ">", 30)
+
+
+class TestConditions(unittest.TestCase):
+    def setUp(self):
+        self.df = euspinolia.parse_csv(SAMPLE)
+
+    def test_comparison_builds_a_condition(self):
+        condition = self.df["age"] > 30
+        self.assertIsInstance(condition, euspinolia.Condition)
+        self.assertEqual(repr(condition), "Condition(age > 30)")
+
+    def test_indexing_with_a_condition_filters(self):
+        adults = self.df[self.df["age"] > 30]
+        self.assertEqual(adults["name"].to_list(), ["ada", "grace"])
+
+    def test_every_operator(self):
+        age = self.df["age"]
+        cases = [
+            (age == 36, [36]),
+            (age != 36, [45, 29]),
+            (age < 36, [29]),
+            (age <= 36, [36, 29]),
+            (age > 36, [45]),
+            (age >= 36, [36, 45]),
+        ]
+        for condition, expected in cases:
+            with self.subTest(condition=repr(condition)):
+                self.assertEqual(self.df[condition]["age"].to_list(), expected)
+
+    def test_matches_filter(self):
+        by_call = self.df.filter("score", ">=", 88.0)
+        by_operator = self.df[self.df["score"] >= 88.0]
+        self.assertEqual(by_call.head(), by_operator.head())
+
+    def test_string_comparison(self):
+        self.assertEqual(self.df[self.df["name"] == "grace"]["age"].to_list(), [45])
+
+    def test_and_combines_conditions(self):
+        both = self.df[(self.df["age"] > 30) & (self.df["score"] < 90)]
+        self.assertEqual(both["name"].to_list(), ["grace"])
+
+    def test_and_of_three(self):
+        df = self.df
+        result = df[(df["age"] > 20) & (df["age"] < 40) & (df["name"] != "ada")]
+        self.assertEqual(result["name"].to_list(), ["Doe, John"])
+
+    def test_or_is_not_supported(self):
+        with self.assertRaises(TypeError):
+            (self.df["age"] > 30) | (self.df["age"] < 30)
+
+    def test_condition_has_no_truth_value(self):
+        with self.assertRaises(TypeError):
+            bool(self.df["age"] > 30)
+        with self.assertRaises(TypeError):
+            # `and` calls bool() on the left side.
+            (self.df["age"] > 30) and (self.df["age"] < 40)
+
+    def test_condition_is_bound_to_its_frame(self):
+        other = euspinolia.parse_csv(SAMPLE)
+        with self.assertRaises(ValueError):
+            self.df[other["age"] > 30]
+        with self.assertRaises(ValueError):
+            (self.df["age"] > 30) & (other["age"] < 40)
+
+    def test_columns_are_not_hashable(self):
+        # `==` builds a Condition, so equality is not identity and there is
+        # no hash to go with it.
+        with self.assertRaises(TypeError):
+            hash(self.df["age"])
 
 
 class TestZeroCopy(unittest.TestCase):

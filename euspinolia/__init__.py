@@ -6,6 +6,12 @@
     (3, 4)
     >>> df["age"].to_list()
     [36, 45, 29]
+    >>> df[df["age"] > 30]
+        name  age  score
+    0    ada   36   91.5
+    1  grace   45   88.0
+
+    [2 rows x 3 columns]
 """
 
 from __future__ import annotations
@@ -29,6 +35,7 @@ __all__ = [
     "parse_csv",
     "DataFrame",
     "Column",
+    "Condition",
     "ColumnType",
     "ParseError",
     "LibraryNotFoundError",
@@ -60,6 +67,55 @@ def parse_csv(text: str | bytes) -> DataFrame:
     handle = ctypes.c_void_p()
     check(lib.eus_parse_csv(encoded, len(encoded), ctypes.byref(handle)))
     return DataFrame(handle.value)
+
+
+# Operator tags as `filter.Op` in src/filter.zig; there is a test pinning them.
+_OPERATORS: dict[str, int] = {
+    "==": 0,
+    "!=": 1,
+    "<": 2,
+    "<=": 3,
+    ">": 4,
+    ">=": 5,
+}
+
+
+class Condition:
+    """A comparison against one column, waiting to be applied.
+
+    `df["age"] > 30` builds one of these instead of a mask: nothing is
+    computed until `df[condition]`, which does the comparison and the row
+    gathering in one Zig call. Conditions combine with `&`; each one is then
+    applied in turn, which is a conjunction without any mask arithmetic.
+    """
+
+    __slots__ = ("_frame", "_clauses")
+
+    def __init__(self, frame: DataFrame, clauses: tuple[tuple[int, str, Any], ...]) -> None:
+        self._frame = frame
+        self._clauses = clauses
+
+    def __and__(self, other: Condition) -> Condition:
+        if not isinstance(other, Condition):
+            return NotImplemented
+        if other._frame is not self._frame:
+            raise ValueError("cannot combine conditions on different DataFrames")
+        return Condition(self._frame, self._clauses + other._clauses)
+
+    def __or__(self, other: Condition) -> Condition:
+        raise TypeError("`|` between conditions is not supported; filter twice instead")
+
+    def __bool__(self) -> bool:
+        raise TypeError(
+            "a Condition has no truth value; use df[condition] to apply it, "
+            "and `&` rather than `and` to combine"
+        )
+
+    def __repr__(self) -> str:
+        clauses = " & ".join(
+            f"{self._frame.columns[index]} {op} {value!r}" for index, op, value in self._clauses
+        )
+        return f"Condition({clauses})"
 
 
 class Column:
@@ -153,6 +209,31 @@ class Column:
         check(lib.eus_column_mean(handle, self._index, ctypes.byref(result)), source=self._name)
         return result.value
 
+    def __eq__(self, other: object) -> Condition:  # type: ignore[override]
+        return self._condition("==", other)
+
+    def __ne__(self, other: object) -> Condition:  # type: ignore[override]
+        return self._condition("!=", other)
+
+    def __lt__(self, other: Any) -> Condition:
+        return self._condition("<", other)
+
+    def __le__(self, other: Any) -> Condition:
+        return self._condition("<=", other)
+
+    def __gt__(self, other: Any) -> Condition:
+        return self._condition(">", other)
+
+    def __ge__(self, other: Any) -> Condition:
+        return self._condition(">=", other)
+
+    # Comparison operators build Conditions, so two Columns never compare
+    # equal as objects; there is no consistent hash to go with that.
+    __hash__ = None  # type: ignore[assignment]
+
+    def _condition(self, op: str, value: Any) -> Condition:
+        return Condition(self._frame, ((self._index, op, value),))
+
     def _reduce(self, function: Any) -> int | float:
         """Run a reduction that keeps the column's type.
 
@@ -235,8 +316,19 @@ class DataFrame:
     def __contains__(self, name: object) -> bool:
         return name in self._columns
 
-    def __getitem__(self, key: str | int) -> Column:
+    def __getitem__(self, key: str | int | Condition) -> Any:
+        """`df["name"]` / `df[0]` is a `Column`; `df[condition]` is a filtered `DataFrame`."""
         self._require_open()
+        if isinstance(key, Condition):
+            if key._frame is not self:
+                raise ValueError("this Condition was built from a different DataFrame")
+            result = self
+            for index, op, value in key._clauses:
+                narrowed = result.filter(index, op, value)
+                if result is not self:
+                    result.close()
+                result = narrowed
+            return result
         if isinstance(key, int):
             index = key + len(self._columns) if key < 0 else key
             if not 0 <= index < len(self._columns):
@@ -261,12 +353,52 @@ class DataFrame:
     def head(self, n: int = 5) -> list[tuple[Any, ...]]:
         """The first `n` rows as tuples.
 
-        Pandas would return a DataFrame here. Slicing a frame means building a
-        new one on the Zig side, which is Phase 4 work; until then this stays
-        an honest list of rows.
+        Pandas would return a DataFrame here. This is a peek, not a slice:
+        a list of tuples is what you want to print or assert on, and it
+        costs no Zig-side allocation.
         """
         columns = [self[name] for name in self._columns]
         return [tuple(column[row] for column in columns) for row in range(min(n, self._rows))]
+
+    def filter(self, column: str | int, op: str, value: int | float | str) -> DataFrame:
+        """The rows where `column <op> value` holds, as a new `DataFrame`.
+
+        `op` is one of `==`, `!=`, `<`, `<=`, `>`, `>=`. The comparison and
+        the row gathering both happen in Zig; the result owns its own memory
+        and outlives this frame. `df.filter("age", ">", 30)` is the same as
+        `df[df["age"] > 30]`.
+        """
+        try:
+            tag = _OPERATORS[op]
+        except KeyError:
+            raise ValueError(
+                f"unknown operator {op!r}; expected one of {', '.join(_OPERATORS)}"
+            ) from None
+
+        index = self[column]._index
+        handle = self._require_open()
+        out = ctypes.c_void_p()
+        name = self._columns[index]
+
+        if isinstance(value, bool):
+            raise TypeError(f"cannot compare column {name!r} with a bool")
+        if isinstance(value, int):
+            code = lib.eus_frame_filter_int(handle, index, tag, value, ctypes.byref(out))
+        elif isinstance(value, float):
+            code = lib.eus_frame_filter_float(handle, index, tag, value, ctypes.byref(out))
+        elif isinstance(value, str):
+            encoded = value.encode("utf-8")
+            code = lib.eus_frame_filter_string(
+                handle, index, tag, encoded, len(encoded), ctypes.byref(out)
+            )
+        else:
+            raise TypeError(
+                f"cannot compare column {name!r} with {type(value).__name__}; "
+                "expected int, float or str"
+            )
+
+        check(code, source=f"{name} {op} {value!r}")
+        return DataFrame(out.value)
 
     def close(self) -> None:
         """Release the Zig-side memory. Idempotent."""
