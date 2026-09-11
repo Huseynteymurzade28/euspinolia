@@ -125,6 +125,44 @@ pub const DataFrame = struct {
         return fromTable(gpa, table);
     }
 
+    /// A new frame holding the rows where `mask` is true, in their original
+    /// order. The result owns its own copies, so either frame may be freed
+    /// without affecting the other.
+    ///
+    /// This is the gather step behind `filter`; the column types are kept as
+    /// they are, even when nothing survives.
+    pub fn take(self: DataFrame, gpa: Allocator, mask: []const bool) !DataFrame {
+        std.debug.assert(mask.len == self.row_count);
+
+        var kept: usize = 0;
+        for (mask) |keep| kept += @intFromBool(keep);
+
+        var result: DataFrame = .{
+            .arena = .init(gpa),
+            .names = &.{},
+            .columns = &.{},
+            .row_count = kept,
+        };
+        errdefer result.arena.deinit();
+        const arena = result.arena.allocator();
+
+        const names = try arena.alloc([]const u8, self.columns.len);
+        for (names, self.names) |*name, source| name.* = try arena.dupe(u8, source);
+        result.names = names;
+
+        const columns = try arena.alloc(Column, self.columns.len);
+        for (columns, self.columns) |*slot, source| {
+            slot.* = switch (source) {
+                .int => |values| .{ .int = try gather(i64, arena, values, mask, kept) },
+                .float => |values| .{ .float = try gather(f64, arena, values, mask, kept) },
+                .string => |values| .{ .string = try gatherStrings(arena, values, mask, kept) },
+            };
+        }
+        result.columns = columns;
+
+        return result;
+    }
+
     pub fn deinit(self: *DataFrame) void {
         self.arena.deinit();
     }
@@ -212,6 +250,52 @@ fn buildStrings(arena: Allocator, table: csv.Table, index: usize) !StringColumn 
         at += text.len;
     }
     offsets[table.rowCount()] = at;
+
+    return .{ .offsets = offsets, .data = data };
+}
+
+fn gather(
+    comptime T: type,
+    arena: Allocator,
+    values: []const T,
+    mask: []const bool,
+    kept: usize,
+) ![]const T {
+    const out = try arena.alloc(T, kept);
+    var at: usize = 0;
+    for (values, mask) |value, keep| {
+        if (!keep) continue;
+        out[at] = value;
+        at += 1;
+    }
+    return out;
+}
+
+fn gatherStrings(
+    arena: Allocator,
+    column: StringColumn,
+    mask: []const bool,
+    kept: usize,
+) !StringColumn {
+    var total: usize = 0;
+    for (mask, 0..) |keep, i| {
+        if (keep) total += column.get(i).len;
+    }
+
+    const data = try arena.alloc(u8, total);
+    const offsets = try arena.alloc(usize, kept + 1);
+
+    var row: usize = 0;
+    var at: usize = 0;
+    for (mask, 0..) |keep, i| {
+        if (!keep) continue;
+        const text = column.get(i);
+        offsets[row] = at;
+        @memcpy(data[at..][0..text.len], text);
+        at += text.len;
+        row += 1;
+    }
+    offsets[kept] = at;
 
     return .{ .offsets = offsets, .data = data };
 }
@@ -358,4 +442,49 @@ test "converts a medium file" {
     try testing.expectEqual(@as(i64, row_count - 1), frame.ints(0).?[row_count - 1]);
     try testing.expectEqual(@as(f64, row_count - 1) + 0.5, frame.floats(2).?[row_count - 1]);
     try testing.expectEqualStrings("user4999", frame.strings(1).?.get(row_count - 1));
+}
+
+test "take keeps the masked rows in order, across every column type" {
+    var df = try DataFrame.parse(testing.allocator, "n,x,s\n1,0.5,ada\n2,1.5,grace\n3,2.5,\n4,3.5,mary\n");
+    defer df.deinit();
+
+    var kept = try df.take(testing.allocator, &.{ true, false, true, true });
+    defer kept.deinit();
+
+    try testing.expectEqual(@as(usize, 3), kept.rowCount());
+    try testing.expectEqual(@as(usize, 3), kept.columnCount());
+    try testing.expectEqualStrings("s", kept.names[2]);
+
+    try testing.expectEqualSlices(i64, &.{ 1, 3, 4 }, kept.ints(0).?);
+    try testing.expectEqualSlices(f64, &.{ 0.5, 2.5, 3.5 }, kept.floats(1).?);
+
+    const names = kept.strings(2).?;
+    try testing.expectEqualSlices(usize, &.{ 0, 3, 3, 7 }, names.offsets);
+    try testing.expectEqualStrings("adamary", names.data);
+    try testing.expectEqualStrings("", names.get(1));
+}
+
+test "take with nothing kept preserves the column types" {
+    var df = try DataFrame.parse(testing.allocator, "n,s\n1,ada\n");
+    defer df.deinit();
+
+    var empty = try df.take(testing.allocator, &.{false});
+    defer empty.deinit();
+
+    try testing.expectEqual(@as(usize, 0), empty.rowCount());
+    // Unlike a header-only parse, an emptied frame remembers what it held.
+    try testing.expectEqual(.int, empty.columnType(0));
+    try testing.expectEqual(@as(usize, 0), empty.ints(0).?.len);
+    try testing.expectEqualSlices(usize, &.{0}, empty.strings(1).?.offsets);
+}
+
+test "the taken frame outlives its source" {
+    var df = try DataFrame.parse(testing.allocator, "n,s\n1,ada\n2,grace\n");
+    var kept = try df.take(testing.allocator, &.{ false, true });
+    defer kept.deinit();
+    df.deinit();
+
+    try testing.expectEqualSlices(i64, &.{2}, kept.ints(0).?);
+    try testing.expectEqualStrings("grace", kept.strings(1).?.get(0));
+    try testing.expectEqualStrings("n", kept.names[0]);
 }
