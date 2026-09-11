@@ -25,13 +25,21 @@ The name comes from *Euspinolia*, the genus of the velvet ant known as the
 1  grace   45   88.0  New York
 
 [2 rows x 4 columns]
+>>> df.groupby("city").agg({"score": "mean"})
+       city  score
+0    London   91.5
+1  New York   88.0
+2     Paris  73.25
+
+[3 rows x 2 columns]
 ```
 
 ## Status
 
-**Phase 4 done.** Reading a CSV, inspecting its shape, pulling out columns,
-reducing them (`sum`, `mean`, `min`, `max`) and filtering rows all work.
-`groupby` is Phase 5. See `roadmap.md`.
+**Phases 0-5 done.** Reading a CSV, inspecting its shape, pulling out
+columns, reducing them (`sum`, `mean`, `min`, `max`), filtering rows and
+`groupby` with aggregates all work. What is left is Phase 6: a proper
+benchmark against pandas, and polish. See `roadmap.md`.
 
 ## Requirements
 
@@ -86,6 +94,10 @@ df.filter("age", ">", 30)               # a new DataFrame with the matching rows
 df[df["age"] > 30]                      # the same thing
 df[(df["age"] > 30) & (df["score"] < 90)]
 df[df["city"] == "Paris"]
+
+df.groupby("city").agg({"score": "mean", "age": "max"})   # one row per city
+df.groupby("city").sum()                                  # every numeric column
+df.groupby("city").count()                                # rows per group
 ```
 
 Reductions keep the column's type: an integer column sums to an `int`, exactly,
@@ -103,6 +115,16 @@ raises `TypeError` rather than silently matching nothing.
 `df[...]` applies in one Zig call. Conditions combine with `&` (each clause
 narrows the previous result) — `|` is not supported, and `and` raises, since
 Python would otherwise coerce the left side to a bool.
+
+`groupby(key)` buckets the rows by one column and returns a lazy `GroupBy`;
+`.agg({column: function})` then reduces each listed column within every group,
+in one Zig call. Functions are `sum`, `mean`, `min`, `max` and `count`. The
+result is a new frame with the key as its first column and one row per
+distinct key, in order of first appearance — not sorted, unlike pandas.
+`sum`, `min` and `max` keep the column's type, `mean` is always float, and
+`count` (which may be asked of any column, since it never reads the values)
+lands in a column named `count`. `.sum()`, `.mean()`, `.min()`, `.max()` and
+`.count()` are shortcuts over every numeric column but the key.
 
 Errors arrive as ordinary Python exceptions: `FileNotFoundError` for a missing
 path, `ParseError` (a `ValueError`) for malformed CSV.
@@ -161,6 +183,17 @@ Filtering the same frame — five columns, keeping the 317,000 rows where
 The mask is one pass over `[]i64`; the gather is a `memcpy` per column, or
 per kept string.
 
+Grouping the same frame by `city` (five distinct values) and averaging
+`score` per group:
+
+| | time |
+|---|---|
+| `df.groupby("city").agg({"score": "mean"})` | 7 ms |
+| Python `dict` loop over the two columns | 240 ms |
+
+Hashing half a million short strings is most of the 7 ms; grouping by the
+integer `age` column instead takes 4 ms.
+
 A proper benchmark against pandas is Phase 6; treat these as a sanity check
 that the Zig side is pulling its weight, not as a published result.
 
@@ -198,12 +231,24 @@ between per-row allocations, and Python reads a column as a flat buffer without
 copying. A `DataFrame` owns its data in its own arena, so the `Table` it came
 from can be freed immediately.
 
+## GroupBy
+
+`src/groupby.zig` is two passes. The first walks the key column once and
+hashes every value into a dense group id (`std.AutoHashMap` for numbers,
+`std.StringHashMap` for text, keyed by slices into the column's own data
+buffer), so afterwards each row knows its group as a `u32` and the map can
+be dropped. The second walks each value column once, folding every row into
+its group's accumulator — a flat array with one slot per group. There is no
+per-group allocation and no sorting; the result rows come out in the order
+the keys were first seen.
+
 ## Crossing into Python
 
 `src/ffi.zig` is the whole C ABI surface, and it keeps three rules:
 
-- A frame crosses as an opaque pointer, created by `eus_read_csv` or
-  `eus_frame_filter_*` and released by `eus_frame_free`. Nothing else owns it.
+- A frame crosses as an opaque pointer, created by `eus_read_csv`,
+  `eus_frame_filter_*` or `eus_frame_groupby` and released by
+  `eus_frame_free`. Nothing else owns it.
 - Zig error sets do not survive the C ABI, so fallible functions return an
   `i32` status and write their result through an out-parameter. The mapping
   from Zig errors to status codes happens once, in one place.
@@ -227,11 +272,13 @@ src/dtype.zig           column type inference
 src/frame.zig           columnar DataFrame and the conversion into it
 src/agg.zig             reductions over a single column
 src/filter.zig          row selection by comparing a column against a value
+src/groupby.zig         hash the keys of one column, reduce others per group
 src/ffi.zig             the C ABI; every symbol is prefixed with `eus_`
 euspinolia/_ffi.py      library discovery, loading, ctypes signatures
-euspinolia/__init__.py  DataFrame, Column, Condition, read_csv
+euspinolia/__init__.py  DataFrame, Column, Condition, GroupBy, read_csv
 tests/test_ffi.py       bridge tests
-tests/test_frame.py     read_csv, indexing, reductions, filtering, memory ownership
+tests/test_frame.py     read_csv, indexing, reductions, filtering, groupby,
+                        memory ownership
 ```
 
 The library is looked up under `zig-out/lib/` by default; set `EUSPINOLIA_LIB`
@@ -246,13 +293,13 @@ to override the path.
 [Zig]     CSV parser → columnar buffer (one typed array per column)
               │
               ▼
-          aggregate → a value;  filter / groupby → a frame     (groupby: not yet)
+          aggregate → a value;  filter / groupby → a frame
               │  borrowed pointer + shape info
               ▼
-[Python]  df["column"], df.head(), df.shape, df[df["column"] > x]
+[Python]  df["column"], df.head(), df[df["column"] > x], df.groupby("column")
 ```
 
-Every step but the marked one works today; `groupby` is the next phase.
+Every step works today.
 
 The scope is deliberately narrow: multi-index, date/time types, NaN semantics,
 join/merge and pivot tables are out. The goal is not a real table engine but a
