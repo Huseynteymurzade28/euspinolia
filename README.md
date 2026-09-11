@@ -19,13 +19,19 @@ The name comes from *Euspinolia*, the genus of the velvet ant known as the
 [3 rows x 4 columns]
 >>> df["age"].to_list()
 [36, 45, 29]
+>>> df[df["age"] > 30]
+    name  age  score      city
+0    ada   36   91.5    London
+1  grace   45   88.0  New York
+
+[2 rows x 4 columns]
 ```
 
 ## Status
 
-**Phase 4, half done.** Reading a CSV, inspecting its shape, pulling out
-columns and reducing them (`sum`, `mean`, `min`, `max`) all work. Filtering is
-the other half of Phase 4; `groupby` is Phase 5. See `roadmap.md`.
+**Phase 4 done.** Reading a CSV, inspecting its shape, pulling out columns,
+reducing them (`sum`, `mean`, `min`, `max`) and filtering rows all work.
+`groupby` is Phase 5. See `roadmap.md`.
 
 ## Requirements
 
@@ -75,12 +81,28 @@ column.sum()      # 195 — reduced in Zig, over the contiguous array
 column.mean()     # 39.0 — always a float
 column.min()      # 29
 column.max()      # 54
+
+df.filter("age", ">", 30)               # a new DataFrame with the matching rows
+df[df["age"] > 30]                      # the same thing
+df[(df["age"] > 30) & (df["score"] < 90)]
+df[df["city"] == "Paris"]
 ```
 
 Reductions keep the column's type: an integer column sums to an `int`, exactly,
 without rounding through a float. A total that leaves the `i64` range raises
 `OverflowError` rather than wrapping, and asking a text column for arithmetic
 raises `TypeError`.
+
+Filtering compares one column against a value with `==`, `!=`, `<`, `<=`, `>`
+or `>=`, and returns a new frame that owns its own memory — it outlives the
+frame it came from, and can be filtered again. Numbers compare across `int`
+and `float` columns; strings compare bytewise; comparing text with a number
+raises `TypeError` rather than silently matching nothing.
+
+`df["age"] > 30` does not compute anything: it builds a `Condition` that
+`df[...]` applies in one Zig call. Conditions combine with `&` (each clause
+narrows the previous result) — `|` is not supported, and `and` raises, since
+Python would otherwise coerce the left side to a bool.
 
 Errors arrive as ordinary Python exceptions: `FileNotFoundError` for a missing
 path, `ParseError` (a `ValueError`) for malformed CSV.
@@ -127,6 +149,18 @@ integer column:
 About **96x**, because Zig walks one flat `[]i64` while Python boxes half a
 million integers to add them up.
 
+Filtering the same frame — five columns, keeping the 317,000 rows where
+`age > 40` — including building the new frame:
+
+| | time |
+|---|---|
+| `df[df["age"] > 40]` | 15 ms |
+| Python loop over the column, then gathering the rows | 750 ms |
+| `csv` module: re-read the file and keep matching rows | 290 ms |
+
+The mask is one pass over `[]i64`; the gather is a `memcpy` per column, or
+per kept string.
+
 A proper benchmark against pandas is Phase 6; treat these as a sanity check
 that the Zig side is pulling its weight, not as a published result.
 
@@ -168,8 +202,8 @@ from can be freed immediately.
 
 `src/ffi.zig` is the whole C ABI surface, and it keeps three rules:
 
-- A frame crosses as an opaque pointer, created by `eus_read_csv` and released
-  by `eus_frame_free`. Nothing else owns it.
+- A frame crosses as an opaque pointer, created by `eus_read_csv` or
+  `eus_frame_filter_*` and released by `eus_frame_free`. Nothing else owns it.
 - Zig error sets do not survive the C ABI, so fallible functions return an
   `i32` status and write their result through an out-parameter. The mapping
   from Zig errors to status codes happens once, in one place.
@@ -192,11 +226,12 @@ src/csv.zig             CSV scanner and the row-major Table
 src/dtype.zig           column type inference
 src/frame.zig           columnar DataFrame and the conversion into it
 src/agg.zig             reductions over a single column
+src/filter.zig          row selection by comparing a column against a value
 src/ffi.zig             the C ABI; every symbol is prefixed with `eus_`
 euspinolia/_ffi.py      library discovery, loading, ctypes signatures
-euspinolia/__init__.py  DataFrame, Column, read_csv
+euspinolia/__init__.py  DataFrame, Column, Condition, read_csv
 tests/test_ffi.py       bridge tests
-tests/test_frame.py     read_csv, indexing, reductions, memory ownership
+tests/test_frame.py     read_csv, indexing, reductions, filtering, memory ownership
 ```
 
 The library is looked up under `zig-out/lib/` by default; set `EUSPINOLIA_LIB`
@@ -211,14 +246,13 @@ to override the path.
 [Zig]     CSV parser → columnar buffer (one typed array per column)
               │
               ▼
-          aggregate → a value;  filter / groupby → a frame     (filter: not yet)
+          aggregate → a value;  filter / groupby → a frame     (groupby: not yet)
               │  borrowed pointer + shape info
               ▼
-[Python]  df["column"], df.head(), df.shape
+[Python]  df["column"], df.head(), df.shape, df[df["column"] > x]
 ```
 
-Every step but the marked one works today; filtering and aggregation are the
-next phases.
+Every step but the marked one works today; `groupby` is the next phase.
 
 The scope is deliberately narrow: multi-index, date/time types, NaN semantics,
 join/merge and pivot tables are out. The goal is not a real table engine but a
