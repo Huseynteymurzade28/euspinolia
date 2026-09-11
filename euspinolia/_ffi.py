@@ -57,6 +57,7 @@ class Status(enum.IntEnum):
     SUM_OVERFLOW = 15
     TYPE_MISMATCH = 16
     INVALID_OPERATOR = 17
+    INVALID_AGGREGATE = 18
     UNKNOWN = 99
 
 
@@ -75,6 +76,7 @@ _STATUS_EXCEPTIONS: dict[int, type[Exception]] = {
     Status.SUM_OVERFLOW: OverflowError,
     Status.TYPE_MISMATCH: TypeError,
     Status.INVALID_OPERATOR: ValueError,
+    Status.INVALID_AGGREGATE: ValueError,
 }
 
 
@@ -234,6 +236,18 @@ def _declare_signatures(lib: ctypes.CDLL) -> None:
         frame_out,
     ]
     lib.eus_frame_filter_string.restype = ctypes.c_int32
+
+    # One output column per (column, function) pair, passed as two parallel
+    # arrays so the call count stays at one whatever the number of specs.
+    lib.eus_frame_groupby.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_size_t,
+        ctypes.POINTER(ctypes.c_size_t),
+        ctypes.POINTER(ctypes.c_uint8),
+        ctypes.c_size_t,
+        frame_out,
+    ]
+    lib.eus_frame_groupby.restype = ctypes.c_int32
 
 
 lib = _load()

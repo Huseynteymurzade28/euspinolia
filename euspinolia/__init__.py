@@ -12,6 +12,13 @@
     1  grace   45   88.0
 
     [2 rows x 3 columns]
+    >>> df.groupby("city").agg({"score": "mean"})
+           city  score
+    0    London   91.5
+    1  New York   88.0
+    2     Paris  73.25
+
+    [3 rows x 2 columns]
 """
 
 from __future__ import annotations
@@ -36,6 +43,7 @@ __all__ = [
     "DataFrame",
     "Column",
     "Condition",
+    "GroupBy",
     "ColumnType",
     "ParseError",
     "LibraryNotFoundError",
@@ -116,6 +124,112 @@ class Condition:
             f"{self._frame.columns[index]} {op} {value!r}" for index, op, value in self._clauses
         )
         return f"Condition({clauses})"
+
+
+# Aggregate tags as `groupby.Func` in src/groupby.zig; there is a test pinning them.
+_AGGREGATES: dict[str, int] = {
+    "sum": 0,
+    "mean": 1,
+    "min": 2,
+    "max": 3,
+    "count": 4,
+}
+
+
+class GroupBy:
+    """`df.groupby(key)`: the rows of a frame, bucketed by one column.
+
+    Nothing is computed until an aggregate is asked for; then Zig hashes
+    the keys and reduces the requested columns in one call. The result is a
+    new `DataFrame` with one row per distinct key, in order of first
+    appearance, whose first column is the key.
+    """
+
+    __slots__ = ("_frame", "_key")
+
+    def __init__(self, frame: DataFrame, key: str | int) -> None:
+        self._frame = frame
+        self._key = frame[key]._index
+
+    @property
+    def key(self) -> str:
+        """The name of the column the rows are grouped by."""
+        return self._frame.columns[self._key]
+
+    def agg(self, specs: dict[str, str]) -> DataFrame:
+        """One output column per entry: `{"score": "mean", "age": "max"}`.
+
+        Functions are `sum`, `mean`, `min`, `max` and `count`. Each column
+        keeps its name in the result, except `count`, which is named "count"
+        and may be asked of any column, since it never reads the values.
+        """
+        frame = self._frame
+        columns: list[int] = []
+        funcs: list[int] = []
+        for column, func in specs.items():
+            try:
+                tag = _AGGREGATES[func]
+            except KeyError:
+                raise ValueError(
+                    f"unknown aggregate {func!r}; expected one of {', '.join(_AGGREGATES)}"
+                ) from None
+            index = frame[column]._index
+            if index == self._key and func != "count":
+                raise ValueError(
+                    f"{frame.columns[index]!r} is the key; it is already the first "
+                    "column of the result"
+                )
+            columns.append(index)
+            funcs.append(tag)
+
+        handle = frame._require_open()
+        count = len(columns)
+        out = ctypes.c_void_p()
+        check(
+            lib.eus_frame_groupby(
+                handle,
+                self._key,
+                (ctypes.c_size_t * count)(*columns),
+                (ctypes.c_uint8 * count)(*funcs),
+                count,
+                ctypes.byref(out),
+            ),
+            source=f"groupby({self.key!r}).agg({specs!r})",
+        )
+        return DataFrame(out.value)
+
+    def sum(self) -> DataFrame:
+        """`agg` with `sum` over every numeric column but the key."""
+        return self._over_numeric("sum")
+
+    def mean(self) -> DataFrame:
+        """`agg` with `mean` over every numeric column but the key."""
+        return self._over_numeric("mean")
+
+    def min(self) -> DataFrame:
+        """`agg` with `min` over every numeric column but the key."""
+        return self._over_numeric("min")
+
+    def max(self) -> DataFrame:
+        """`agg` with `max` over every numeric column but the key."""
+        return self._over_numeric("max")
+
+    def count(self) -> DataFrame:
+        """Rows per group, in a column named "count"."""
+        return self.agg({self.key: "count"})
+
+    def _over_numeric(self, func: str) -> DataFrame:
+        frame = self._frame
+        return self.agg(
+            {
+                name: func
+                for index, (name, dtype) in enumerate(zip(frame.columns, frame.dtypes))
+                if index != self._key and dtype is not ColumnType.STRING
+            }
+        )
+
+    def __repr__(self) -> str:
+        return f"GroupBy({self.key!r}, {len(self._frame)} rows)"
 
 
 class Column:
@@ -399,6 +513,13 @@ class DataFrame:
 
         check(code, source=f"{name} {op} {value!r}")
         return DataFrame(out.value)
+
+    def groupby(self, key: str | int) -> GroupBy:
+        """Bucket the rows by one column; see `GroupBy` for what to do next.
+
+        `df.groupby("city").agg({"score": "mean"})` is the whole shape of it.
+        """
+        return GroupBy(self, key)
 
     def close(self) -> None:
         """Release the Zig-side memory. Idempotent."""

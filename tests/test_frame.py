@@ -1,4 +1,4 @@
-"""Phase 3-4 tests: reading CSV into a DataFrame from Python, and working on it.
+"""Phase 3-5 tests: reading CSV into a DataFrame from Python, and working on it.
 
 Run from the repo root:
     zig build && python3 -m unittest discover -s tests -v
@@ -363,6 +363,157 @@ class TestConditions(unittest.TestCase):
         # no hash to go with it.
         with self.assertRaises(TypeError):
             hash(self.df["age"])
+
+
+GROUPED = (
+    "city,n,x\n"
+    "paris,1,0.5\n"
+    "rome,2,1.5\n"
+    "paris,3,2.5\n"
+    "berlin,4,3.5\n"
+    "rome,5,4.5\n"
+)
+
+
+class TestGroupBy(unittest.TestCase):
+    def setUp(self):
+        self.df = euspinolia.parse_csv(GROUPED)
+
+    def test_groupby_is_lazy(self):
+        grouped = self.df.groupby("city")
+        self.assertIsInstance(grouped, euspinolia.GroupBy)
+        self.assertEqual(grouped.key, "city")
+        self.assertEqual(repr(grouped), "GroupBy('city', 5 rows)")
+
+    def test_agg_one_column(self):
+        out = self.df.groupby("city").agg({"n": "sum"})
+        self.assertIsInstance(out, euspinolia.DataFrame)
+        self.assertEqual(out.columns, ("city", "n"))
+        self.assertEqual(out["city"].to_list(), ["paris", "rome", "berlin"])
+        self.assertEqual(out["n"].to_list(), [4, 7, 4])
+
+    def test_groups_appear_in_first_seen_order(self):
+        out = self.df.groupby("city").count()
+        self.assertEqual(out["city"].to_list(), ["paris", "rome", "berlin"])
+
+    def test_every_function(self):
+        out = self.df.groupby("city").agg({"n": "mean", "x": "max"})
+        self.assertEqual(out.columns, ("city", "n", "x"))
+        self.assertEqual(out["n"].to_list(), [2.0, 3.5, 4.0])
+        self.assertEqual(out["x"].to_list(), [2.5, 4.5, 3.5])
+
+        self.assertEqual(self.df.groupby("city").agg({"n": "min"})["n"].to_list(), [1, 2, 4])
+        self.assertEqual(self.df.groupby("city").agg({"x": "sum"})["x"].to_list(), [3.0, 6.0, 3.5])
+
+    def test_result_types(self):
+        out = self.df.groupby("city").agg({"n": "sum", "x": "mean"})
+        self.assertEqual(
+            out.dtypes,
+            (euspinolia.ColumnType.STRING, euspinolia.ColumnType.INT, euspinolia.ColumnType.FLOAT),
+        )
+        self.assertIsInstance(out["n"][0], int)
+
+        means = self.df.groupby("city").agg({"n": "mean"})
+        self.assertIs(means["n"].dtype, euspinolia.ColumnType.FLOAT)
+
+    def test_count(self):
+        out = self.df.groupby("city").count()
+        self.assertEqual(out.columns, ("city", "count"))
+        self.assertEqual(out["count"].to_list(), [2, 2, 1])
+        # `count` accepts any column, including text and the key itself.
+        self.assertEqual(self.df.groupby("city").agg({"city": "count"})["count"].to_list(), [2, 2, 1])
+
+    def test_shortcuts_cover_the_numeric_columns(self):
+        out = self.df.groupby("city").sum()
+        self.assertEqual(out.columns, ("city", "n", "x"))
+        self.assertEqual(out["n"].to_list(), [4, 7, 4])
+
+        self.assertEqual(self.df.groupby("city").mean()["x"].to_list(), [1.5, 3.0, 3.5])
+        self.assertEqual(self.df.groupby("city").min()["n"].to_list(), [1, 2, 4])
+        self.assertEqual(self.df.groupby("city").max()["n"].to_list(), [3, 5, 4])
+
+    def test_numeric_key(self):
+        df = euspinolia.parse_csv("k,v\n2,10\n1,20\n2,30\n")
+        out = df.groupby("k").agg({"v": "sum"})
+        self.assertEqual(out["k"].to_list(), [2, 1])
+        self.assertEqual(out["v"].to_list(), [40, 20])
+        self.assertIs(out["k"].dtype, euspinolia.ColumnType.INT)
+
+    def test_float_key(self):
+        df = euspinolia.parse_csv("k,v\n0.5,1\n1.5,2\n0.5,3\n")
+        out = df.groupby("k").count()
+        self.assertEqual(out["k"].to_list(), [0.5, 1.5])
+        self.assertEqual(out["count"].to_list(), [2, 1])
+
+    def test_key_by_position(self):
+        self.assertEqual(self.df.groupby(0).count()["count"].to_list(), [2, 2, 1])
+
+    def test_shortcuts_skip_string_columns(self):
+        df = euspinolia.parse_csv("k,s,n\na,x,1\na,y,2\n")
+        out = df.groupby("k").sum()
+        self.assertEqual(out.columns, ("k", "n"))
+
+    def test_no_specs_gives_the_distinct_keys(self):
+        out = self.df.groupby("city").agg({})
+        self.assertEqual(out.columns, ("city",))
+        self.assertEqual(out["city"].to_list(), ["paris", "rome", "berlin"])
+
+    def test_empty_frame(self):
+        df = euspinolia.parse_csv("k,v\n")
+        out = df.groupby("k").count()
+        self.assertEqual(out.shape, (0, 2))
+        self.assertEqual(out["count"].to_list(), [])
+
+    def test_composes_with_filter(self):
+        out = self.df[self.df["n"] > 1].groupby("city").count()
+        self.assertEqual(out["city"].to_list(), ["rome", "paris", "berlin"])
+        self.assertEqual(out["count"].to_list(), [2, 1, 1])
+
+    def test_result_outlives_the_source(self):
+        out = self.df.groupby("city").agg({"n": "sum"})
+        self.df.close()
+        gc.collect()
+        self.assertEqual(out["n"].to_list(), [4, 7, 4])
+
+    def test_matches_python(self):
+        expected: dict[str, list[float]] = {}
+        for city, x in zip(self.df["city"], self.df["x"]):
+            expected.setdefault(city, []).append(x)
+        out = self.df.groupby("city").agg({"x": "mean"})
+        for city, mean in zip(out["city"], out["x"]):
+            self.assertAlmostEqual(mean, sum(expected[city]) / len(expected[city]))
+
+    def test_sum_overflow_raises(self):
+        limit = 2**63 - 1
+        df = euspinolia.parse_csv(f"k,n\na,{limit}\na,1\n")
+        with self.assertRaises(OverflowError):
+            df.groupby("k").sum()
+
+    def test_arithmetic_on_text_raises(self):
+        for func in ("sum", "mean", "min", "max"):
+            with self.subTest(func=func):
+                with self.assertRaises(TypeError):
+                    self.df.groupby("n").agg({"city": func})
+
+    def test_aggregating_the_key_raises(self):
+        with self.assertRaises(ValueError):
+            self.df.groupby("n").agg({"n": "sum"})
+
+    def test_unknown_function_raises(self):
+        with self.assertRaises(ValueError):
+            self.df.groupby("city").agg({"n": "median"})
+
+    def test_unknown_column_raises(self):
+        with self.assertRaises(KeyError):
+            self.df.groupby("missing")
+        with self.assertRaises(KeyError):
+            self.df.groupby("city").agg({"missing": "sum"})
+
+    def test_needs_an_open_frame(self):
+        grouped = self.df.groupby("city")
+        self.df.close()
+        with self.assertRaises(ValueError):
+            grouped.count()
 
 
 class TestZeroCopy(unittest.TestCase):
