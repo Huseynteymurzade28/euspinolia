@@ -4,8 +4,8 @@
 //!
 //! - Every symbol is prefixed with `eus_`.
 //! - A `DataFrame` crosses the boundary as an opaque pointer. It is created by
-//!   `eus_read_csv` / `eus_parse_csv` and must be released with
-//!   `eus_frame_free`; nothing else owns it.
+//!   `eus_read_csv` / `eus_parse_csv` / `eus_frame_filter_*` and must be
+//!   released with `eus_frame_free`; nothing else owns it.
 //! - Functions that can fail return an `i32` status (`Status`) and write their
 //!   result through an out-parameter. Zig error sets do not survive the C ABI,
 //!   so every error is mapped to a status code once, here.
@@ -19,6 +19,7 @@ const builtin = @import("builtin");
 const agg = @import("agg.zig");
 const csv = @import("csv.zig");
 const dtype = @import("dtype.zig");
+const filter = @import("filter.zig");
 const frame = @import("frame.zig");
 
 const DataFrame = frame.DataFrame;
@@ -50,6 +51,8 @@ pub const Status = enum(i32) {
     not_numeric = 13,
     empty_column = 14,
     sum_overflow = 15,
+    type_mismatch = 16,
+    invalid_operator = 17,
     unknown = 99,
 
     fn message(self: Status) [:0]const u8 {
@@ -70,6 +73,8 @@ pub const Status = enum(i32) {
             .not_numeric => "this operation needs a numeric column",
             .empty_column => "a column with no rows has no value here",
             .sum_overflow => "the sum left the range of a 64-bit integer",
+            .type_mismatch => "cannot compare text with a number",
+            .invalid_operator => "unknown comparison operator",
             .unknown => "unknown error",
         };
     }
@@ -90,6 +95,7 @@ fn statusFor(err: anyerror) Status {
         error.NotNumeric => .not_numeric,
         error.EmptyColumn => .empty_column,
         error.SumOverflow => .sum_overflow,
+        error.TypeMismatch => .type_mismatch,
         // Everything left is some flavour of read failure. Collapsing it keeps
         // the ABI small; the distinctions are not actionable from Python.
         else => .io_failed,
@@ -293,6 +299,59 @@ export fn eus_column_mean(handle: *const DataFrame, index: usize, out: *f64) i32
     return @intFromEnum(Status.ok);
 }
 
+/// Builds a new frame from the rows where `column <op> value` holds. `op` is
+/// a `filter.Op` tag. The result is independent of `handle` and must be
+/// released with `eus_frame_free`; on failure `out_frame` is left untouched.
+fn filterInto(
+    handle: *const DataFrame,
+    index: usize,
+    op: u8,
+    value: filter.Value,
+    out_frame: *?*DataFrame,
+) i32 {
+    if (index >= handle.columnCount()) return @intFromEnum(Status.column_out_of_range);
+    const operator = std.enums.fromInt(filter.Op, op) orelse
+        return @intFromEnum(Status.invalid_operator);
+
+    const gpa = allocator();
+    const kept = filter.filter(gpa, handle.*, index, operator, value) catch |err|
+        return @intFromEnum(statusFor(err));
+
+    return publish(gpa, kept, out_frame);
+}
+
+export fn eus_frame_filter_int(
+    handle: *const DataFrame,
+    index: usize,
+    op: u8,
+    value: i64,
+    out_frame: *?*DataFrame,
+) i32 {
+    return filterInto(handle, index, op, .{ .int = value }, out_frame);
+}
+
+export fn eus_frame_filter_float(
+    handle: *const DataFrame,
+    index: usize,
+    op: u8,
+    value: f64,
+    out_frame: *?*DataFrame,
+) i32 {
+    return filterInto(handle, index, op, .{ .float = value }, out_frame);
+}
+
+/// The value is borrowed only for the duration of the call.
+export fn eus_frame_filter_string(
+    handle: *const DataFrame,
+    index: usize,
+    op: u8,
+    value_ptr: [*]const u8,
+    value_len: usize,
+    out_frame: *?*DataFrame,
+) i32 {
+    return filterInto(handle, index, op, .{ .string = value_ptr[0..value_len] }, out_frame);
+}
+
 const testing = std.testing;
 
 /// Mirrors what the Python layer does: parse, then read back through the ABI.
@@ -437,6 +496,78 @@ test "reductions report the reason they cannot run" {
         eus_column_mean(df, 9, &as_float),
     );
     try testing.expectEqual(@intFromEnum(Status.not_numeric), eus_column_mean(df, 0, &as_float));
+}
+
+test "filters cross the boundary as new, independent frames" {
+    const df = try parseForTest("name,age\nada,36\ngrace,45\njohn,29\n");
+
+    var handle: ?*DataFrame = null;
+    const gt: u8 = @intFromEnum(filter.Op.gt);
+    try testing.expectEqual(@as(i32, 0), eus_frame_filter_int(df, 1, gt, 30, &handle));
+    const adults = handle.?;
+    defer eus_frame_free(adults);
+
+    // Free the source first: the result must not borrow from it.
+    eus_frame_free(df);
+
+    try testing.expectEqual(@as(usize, 2), eus_frame_rows(adults));
+    try testing.expectEqualSlices(i64, &.{ 36, 45 }, eus_frame_ints(adults, 1).?[0..2]);
+
+    var len: usize = 0;
+    const name = eus_frame_column_name(adults, 0, &len).?;
+    try testing.expectEqualStrings("name", name[0..len]);
+}
+
+test "each filter entry point takes its own value type" {
+    const df = try parseForTest("n,x,s\n1,0.5,ada\n2,1.5,grace\n");
+    defer eus_frame_free(df);
+
+    const eq: u8 = @intFromEnum(filter.Op.eq);
+    var handle: ?*DataFrame = null;
+
+    try testing.expectEqual(@as(i32, 0), eus_frame_filter_float(df, 1, eq, 1.5, &handle));
+    eus_frame_free(handle);
+    handle = null;
+
+    try testing.expectEqual(@as(i32, 0), eus_frame_filter_string(df, 2, eq, "ada", 3, &handle));
+    try testing.expectEqual(@as(usize, 1), eus_frame_rows(handle.?));
+    eus_frame_free(handle);
+}
+
+test "filter failures come back as status codes" {
+    const df = try parseForTest("n,s\n1,ada\n");
+    defer eus_frame_free(df);
+
+    var handle: ?*DataFrame = null;
+    const eq: u8 = @intFromEnum(filter.Op.eq);
+
+    try testing.expectEqual(
+        @intFromEnum(Status.column_out_of_range),
+        eus_frame_filter_int(df, 9, eq, 1, &handle),
+    );
+    try testing.expectEqual(
+        @intFromEnum(Status.invalid_operator),
+        eus_frame_filter_int(df, 0, 42, 1, &handle),
+    );
+    try testing.expectEqual(
+        @intFromEnum(Status.type_mismatch),
+        eus_frame_filter_int(df, 1, eq, 1, &handle),
+    );
+    try testing.expectEqual(
+        @intFromEnum(Status.type_mismatch),
+        eus_frame_filter_string(df, 0, eq, "1", 1, &handle),
+    );
+    try testing.expect(handle == null);
+}
+
+test "operator tags are the numbers Python expects" {
+    // euspinolia/__init__.py hardcodes these in `_OPERATORS`.
+    try testing.expectEqual(@as(u8, 0), @intFromEnum(filter.Op.eq));
+    try testing.expectEqual(@as(u8, 1), @intFromEnum(filter.Op.ne));
+    try testing.expectEqual(@as(u8, 2), @intFromEnum(filter.Op.lt));
+    try testing.expectEqual(@as(u8, 3), @intFromEnum(filter.Op.le));
+    try testing.expectEqual(@as(u8, 4), @intFromEnum(filter.Op.gt));
+    try testing.expectEqual(@as(u8, 5), @intFromEnum(filter.Op.ge));
 }
 
 test "column type tags are the numbers Python expects" {
