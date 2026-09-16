@@ -44,6 +44,13 @@ def fmt(seconds):
     return f"{seconds * 1e3:.1f} ms"
 
 
+def csv_write(path, header, rows):
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(header)
+        writer.writerows(rows)
+
+
 def csv_rows(path):
     with open(path, newline="", encoding="utf-8") as f:
         reader = csv.reader(f)
@@ -59,6 +66,7 @@ def main():
     df = euspinolia.read_csv(path)
     rows = csv_rows(path)
     pdf = pd.read_csv(path) if pd else None
+    out = Path(path).with_suffix(".out.csv")
     size_mb = Path(path).stat().st_size / 1e6
     print(f"{path}: {len(df):,} rows x {df.shape[1]} columns, {size_mb:.1f} MB")
     print(f"best of {RUNS} runs\n")
@@ -70,6 +78,12 @@ def main():
             lambda: euspinolia.read_csv(path).close(),
             (lambda: pd.read_csv(path)) if pd else None,
             lambda: csv_rows(path),
+        ),
+        (
+            "write back out",
+            lambda: df.to_csv(out),
+            (lambda: pdf.to_csv(out, index=False)) if pd else None,
+            lambda: csv_write(out, df.columns, rows),
         ),
         (
             "sum an int column",
@@ -113,6 +127,8 @@ def main():
         t_py = best_of(py)
         cells.append(f"{fmt(t_py)} ({t_py / t_eus:.0f}x)")
         table.append(cells)
+
+    out.unlink(missing_ok=True)
 
     widths = [max(len(row[i]) for row in table) for i in range(len(header))]
     for row in table:

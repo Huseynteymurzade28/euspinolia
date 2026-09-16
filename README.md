@@ -100,6 +100,9 @@ df[df["city"] == "Paris"]
 df.groupby("city").agg({"score": "mean", "age": "max"})   # one row per city
 df.groupby("city").sum()                                  # every numeric column
 df.groupby("city").count()                                # rows per group
+
+df.to_csv("out.csv")   # write it back out; reads back as the same frame
+df.to_csv()            # or as a string
 ```
 
 Reductions keep the column's type: an integer column sums to an `int`, exactly,
@@ -128,6 +131,12 @@ distinct key, in order of first appearance — not sorted, unlike pandas.
 lands in a column named `count`. `.sum()`, `.mean()`, `.min()`, `.max()` and
 `.count()` are shortcuts over every numeric column but the key.
 
+`to_csv` serialises in Zig and hands Python the bytes, which it writes to
+`path` or returns as a `str`. The output is what the parser reads: a header,
+`\n` line endings, and a field quoted only when it holds a comma, a quote or
+a line break. Floats always carry a `.` or an exponent, so a float column
+whose values happen to be whole numbers comes back as float, not int.
+
 Errors arrive as ordinary Python exceptions: `FileNotFoundError` for a missing
 path, `ParseError` (a `ValueError`) for malformed CSV.
 
@@ -148,7 +157,7 @@ after `close()` raises `ValueError` instead of touching freed memory.
 
 ## Performance
 
-`bench/bench.py` times the same six jobs in euspinolia, pandas and the
+`bench/bench.py` times the same seven jobs in euspinolia, pandas and the
 standard `csv` module plus plain Python, on a generated 18 MB CSV — 500,000
 rows, 5 columns (`id`, `name`, `dept`, `salary`, `score`), best of five runs.
 The numbers below are from one laptop with pandas 3.0.5 and Python 3.14; run
@@ -163,6 +172,7 @@ python3 bench/make_big.py                                # writes data/big.csv
 | | euspinolia | pandas | csv module + Python |
 |---|---|---|---|
 | read + parse | 114 ms | 183 ms | 335 ms |
+| write back out (`to_csv`) | 63 ms | 478 ms | 294 ms |
 | sum an int column | 0.2 ms | 0.2 ms | 10.1 ms |
 | mean of a float column | 0.2 ms | 0.5 ms | 10.3 ms |
 | filter `salary > 120,000` (keeps half the rows) | 10.5 ms | 8.7 ms | 13.8 ms |
@@ -175,6 +185,9 @@ What the table says:
   pandas, and the gap is not scanning alone. The `csv` module pays for a
   Python tuple per row before any conversion; euspinolia hands back typed
   columns Python never has to materialise.
+- **Writing** is the widest gap, 7x over pandas. `src/write.zig` walks the
+  typed columns and prints straight into one growing buffer; pandas formats
+  every cell through a Python object on the way to text.
 - **Reductions** are a wash against pandas, as they should be — both walk one
   flat array in native code. The 50x over Python is the point of columnar
   storage: Zig adds a `[]i64`, Python boxes half a million integers.
@@ -254,6 +267,8 @@ the keys were first seen.
   from Zig errors to status codes happens once, in one place.
 - Column data is handed out as borrowed pointers into the frame's arena. They
   are valid until the frame is freed, and the caller must not write to them.
+  The one exception is the CSV text from `eus_frame_to_csv`, which Python
+  copies out and then releases with `eus_bytes_free`.
 
 ## Tests
 
@@ -273,6 +288,7 @@ src/frame.zig           columnar DataFrame and the conversion into it
 src/agg.zig             reductions over a single column
 src/filter.zig          row selection by comparing a column against a value
 src/groupby.zig         hash the keys of one column, reduce others per group
+src/write.zig           serialise a frame back to CSV
 src/ffi.zig             the C ABI; every symbol is prefixed with `eus_`
 euspinolia/_ffi.py      library discovery, loading, ctypes signatures
 euspinolia/__init__.py  DataFrame, Column, Condition, GroupBy, read_csv
@@ -304,7 +320,8 @@ to override the path.
               │
               ├─▶ agg.zig      sum / mean / min / max      → one value
               ├─▶ filter.zig   mask a column, gather rows  → a new frame
-              └─▶ groupby.zig  hash keys, fold per group   → a new frame
+              ├─▶ groupby.zig  hash keys, fold per group   → a new frame
+              └─▶ write.zig    serialise                   → CSV bytes
               │
               │  ffi.zig: opaque frame pointer, i32 status codes,
               │  borrowed column pointers into the arena
