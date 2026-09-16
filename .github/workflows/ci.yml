@@ -71,7 +71,7 @@ jobs:
         with:
           name: dist
           path: dist
-      - run: pip install --only-binary :all: --no-index --find-links dist euspinolia
+      - run: pip install --only-binary ":all:" --no-index --find-links dist euspinolia
       # Run the suite from outside the checkout so it imports the installed
       # wheel, not the source tree.
       - shell: bash
