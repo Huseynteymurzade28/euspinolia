@@ -31,10 +31,19 @@ const DataFrame = frame.DataFrame;
 
 var debug_gpa: std.heap.DebugAllocator(.{}) = .init;
 
+// `smp_allocator` keys its per-thread state on a `threadlocal`, and TLS in a
+// DLL loaded through ctypes crashes on Windows/ARM64 with the current
+// toolchain; the same general-purpose allocator with safety off, guarded by
+// a mutex instead, stands in there.
+const tls_is_broken = builtin.os.tag == .windows and builtin.cpu.arch == .aarch64;
+var release_gpa: std.heap.DebugAllocator(.{ .safety = false }) = .init;
+
 /// Frames outlive the call that created them, so they cannot come from a
 /// scratch arena; this is the process-wide allocator behind the C ABI.
 fn allocator() std.mem.Allocator {
-    return if (builtin.mode == .Debug) debug_gpa.allocator() else std.heap.smp_allocator;
+    if (builtin.mode == .Debug) return debug_gpa.allocator();
+    if (tls_is_broken) return release_gpa.allocator();
+    return std.heap.smp_allocator;
 }
 
 /// Status codes returned across the boundary. Values are part of the ABI:
