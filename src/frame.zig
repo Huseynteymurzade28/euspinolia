@@ -261,14 +261,16 @@ fn gather(
     mask: []const bool,
     kept: usize,
 ) ![]const T {
-    const out = try arena.alloc(T, kept);
+    // One slot of slack so the unconditional store is always in bounds:
+    // writing every value and advancing only on `keep` avoids a branch the
+    // CPU cannot predict when the mask is random.
+    const out = try arena.alloc(T, kept + 1);
     var at: usize = 0;
     for (values, mask) |value, keep| {
-        if (!keep) continue;
         out[at] = value;
-        at += 1;
+        at += @intFromBool(keep);
     }
-    return out;
+    return out[0..kept];
 }
 
 fn gatherStrings(
@@ -277,27 +279,32 @@ fn gatherStrings(
     mask: []const bool,
     kept: usize,
 ) !StringColumn {
+    // Same branchless shape as `gather`: copy every row, advance only on
+    // `keep`. The slack is the longest value, so a dropped row's copy always
+    // lands inside the buffer (and is overwritten by the next kept one).
     var total: usize = 0;
+    var longest: usize = 0;
     for (mask, 0..) |keep, i| {
-        if (keep) total += column.get(i).len;
+        const len = column.get(i).len;
+        total += len * @intFromBool(keep);
+        longest = @max(longest, len);
     }
 
-    const data = try arena.alloc(u8, total);
+    const data = try arena.alloc(u8, total + longest);
     const offsets = try arena.alloc(usize, kept + 1);
 
     var row: usize = 0;
     var at: usize = 0;
     for (mask, 0..) |keep, i| {
-        if (!keep) continue;
         const text = column.get(i);
         offsets[row] = at;
         @memcpy(data[at..][0..text.len], text);
-        at += text.len;
-        row += 1;
+        at += text.len * @intFromBool(keep);
+        row += @intFromBool(keep);
     }
     offsets[kept] = at;
 
-    return .{ .offsets = offsets, .data = data };
+    return .{ .offsets = offsets, .data = data[0..total] };
 }
 
 const testing = std.testing;
@@ -462,6 +469,18 @@ test "take keeps the masked rows in order, across every column type" {
     try testing.expectEqualSlices(usize, &.{ 0, 3, 3, 7 }, names.offsets);
     try testing.expectEqualStrings("adamary", names.data);
     try testing.expectEqualStrings("", names.get(1));
+}
+
+test "take drops a trailing string longer than everything kept" {
+    var df = try DataFrame.parse(testing.allocator, "s\nab\nmuch longer\n");
+    defer df.deinit();
+
+    var kept = try df.take(testing.allocator, &.{ true, false });
+    defer kept.deinit();
+
+    const names = kept.strings(0).?;
+    try testing.expectEqualSlices(usize, &.{ 0, 2 }, names.offsets);
+    try testing.expectEqualStrings("ab", names.data);
 }
 
 test "take with nothing kept preserves the column types" {
