@@ -36,10 +36,12 @@ The name comes from *Euspinolia*, the genus of the velvet ant known as the
 
 ## Status
 
-**Phases 0-5 done.** Reading a CSV, inspecting its shape, pulling out
+**Complete, as scoped.** Reading a CSV, inspecting its shape, pulling out
 columns, reducing them (`sum`, `mean`, `min`, `max`), filtering rows and
-`groupby` with aggregates all work. What is left is Phase 6: a proper
-benchmark against pandas, and polish. See `roadmap.md`.
+`groupby` with aggregates all work, and `bench/` measures them against pandas.
+The scope was fixed at the start and is not growing: multi-index, date/time
+types, NaN semantics, join/merge and pivot tables are out. The goal was never a
+real table engine but a teachable subset that genuinely works.
 
 ## Requirements
 
@@ -146,56 +148,54 @@ after `close()` raises `ValueError` instead of touching freed memory.
 
 ## Performance
 
-Reading an 18 MB CSV — 500,000 rows, 5 columns — on one machine, best of five
-runs, against Python's standard `csv` module:
+`bench/bench.py` times the same six jobs in euspinolia, pandas and the
+standard `csv` module plus plain Python, on a generated 18 MB CSV — 500,000
+rows, 5 columns (`id`, `name`, `dept`, `salary`, `score`), best of five runs.
+The numbers below are from one laptop with pandas 3.0.5 and Python 3.14; run
+it yourself, they will differ:
 
-| | time | |
-|---|---|---|
-| `euspinolia.read_csv` | 0.20s | parses, infers types, builds columns |
-| `csv.reader` → list of rows | 0.59s | strings only, no types | 
-| `csv.reader` + `int`/`float` per field | 0.61s | the same work | 
+```sh
+python3 -m venv .venv && .venv/bin/pip install pandas   # optional
+python3 bench/make_big.py                                # writes data/big.csv
+.venv/bin/python bench/bench.py
+```
 
-So roughly **3x** for the same job, and the gap is not the parsing alone: the
-`csv` module already pays for a Python tuple per row before any conversion,
-while euspinolia hands back typed columns Python never has to materialise.
+| | euspinolia | pandas | csv module + Python |
+|---|---|---|---|
+| read + parse | 114 ms | 183 ms | 335 ms |
+| sum an int column | 0.2 ms | 0.2 ms | 10.1 ms |
+| mean of a float column | 0.2 ms | 0.5 ms | 10.3 ms |
+| filter `salary > 120,000` (keeps half the rows) | 10.5 ms | 8.7 ms | 13.8 ms |
+| groupby `dept` (5 groups), mean `score` | 7.5 ms | 23.6 ms | 47.8 ms |
+| groupby `dept`, count | 7.1 ms | 23.7 ms | 24.9 ms |
 
-Reductions are where the columnar layout really pays. Summing a 500,000-row
-integer column:
+What the table says:
 
-| | time |
-|---|---|
-| `column.sum()` | 0.5 ms |
-| `sum(column)` — Python looping over the same buffer | 50 ms |
-| `sum(column.to_list())` — copy out first | 37 ms |
+- **Parsing** is the headline: 3x faster than the `csv` module and ahead of
+  pandas, and the gap is not scanning alone. The `csv` module pays for a
+  Python tuple per row before any conversion; euspinolia hands back typed
+  columns Python never has to materialise.
+- **Reductions** are a wash against pandas, as they should be — both walk one
+  flat array in native code. The 50x over Python is the point of columnar
+  storage: Zig adds a `[]i64`, Python boxes half a million integers.
+- **GroupBy** is 3x faster than pandas here because the job is small: five
+  short keys, one aggregate. `src/groupby.zig` hashes each key straight into a
+  dense group id and folds into a flat accumulator array; pandas builds a
+  general `GroupBy` object that would keep winning as the job grew.
+- **Filtering is the one loss**, and a narrow one. The mask is one pass;
+  the gather that follows is branchless — every row is written, the cursor
+  advances only on a kept one — because a `continue` on a mask the CPU
+  cannot predict cost more than the copy itself (the numeric columns alone
+  went from 10 ms to 3 ms). What remains is the two text columns: euspinolia
+  copies every kept string's bytes into a packed buffer, so the result owns
+  its memory and outlives the frame it came from, while pandas (without
+  pyarrow) keeps a string column as pointers to Python `str` objects and
+  copies eight bytes per row. The plain-Python comprehension likewise only
+  copies references — it has not built a frame.
 
-About **96x**, because Zig walks one flat `[]i64` while Python boxes half a
-million integers to add them up.
-
-Filtering the same frame — five columns, keeping the 317,000 rows where
-`age > 40` — including building the new frame:
-
-| | time |
-|---|---|
-| `df[df["age"] > 40]` | 15 ms |
-| Python loop over the column, then gathering the rows | 750 ms |
-| `csv` module: re-read the file and keep matching rows | 290 ms |
-
-The mask is one pass over `[]i64`; the gather is a `memcpy` per column, or
-per kept string.
-
-Grouping the same frame by `city` (five distinct values) and averaging
-`score` per group:
-
-| | time |
-|---|---|
-| `df.groupby("city").agg({"score": "mean"})` | 7 ms |
-| Python `dict` loop over the two columns | 240 ms |
-
-Hashing half a million short strings is most of the 7 ms; grouping by the
-integer `age` column instead takes 4 ms.
-
-A proper benchmark against pandas is Phase 6; treat these as a sanity check
-that the Zig side is pulling its weight, not as a published result.
+Treat all of this as a sanity check that the Zig side is pulling its weight,
+not as a published result: one machine, one file, and pandas is doing more
+than euspinolia at every row.
 
 ## CSV support
 
@@ -279,6 +279,8 @@ euspinolia/__init__.py  DataFrame, Column, Condition, GroupBy, read_csv
 tests/test_ffi.py       bridge tests
 tests/test_frame.py     read_csv, indexing, reductions, filtering, groupby,
                         memory ownership
+bench/make_big.py       writes the 500,000-row CSV the benchmark reads
+bench/bench.py          euspinolia vs pandas vs the csv module, as a table
 ```
 
 The library is looked up under `zig-out/lib/` by default; set `EUSPINOLIA_LIB`
@@ -288,19 +290,25 @@ to override the path.
 
 ```
 [Python]  df = euspinolia.read_csv("data.csv")
-              │  ctypes call
+              │  ctypes call, path as bytes
               ▼
-[Zig]     CSV parser → columnar buffer (one typed array per column)
+[Zig]     csv.zig    scan the file into a row-major Table
               │
               ▼
-          aggregate → a value;  filter / groupby → a frame
-              │  borrowed pointer + shape info
+          dtype.zig  infer a type per column: int → float → string
+              │
               ▼
-[Python]  df["column"], df.head(), df[df["column"] > x], df.groupby("column")
+          frame.zig  DataFrame — one typed array per column, in one arena
+              │      int/float: flat []i64 / []f64
+              │      string:    packed bytes + offsets
+              │
+              ├─▶ agg.zig      sum / mean / min / max      → one value
+              ├─▶ filter.zig   mask a column, gather rows  → a new frame
+              └─▶ groupby.zig  hash keys, fold per group   → a new frame
+              │
+              │  ffi.zig: opaque frame pointer, i32 status codes,
+              │  borrowed column pointers into the arena
+              ▼
+[Python]  DataFrame / Column / Condition / GroupBy wrap the handle;
+          df["salary"][0] reads the Zig buffer through ctypes, no copy
 ```
-
-Every step works today.
-
-The scope is deliberately narrow: multi-index, date/time types, NaN semantics,
-join/merge and pivot tables are out. The goal is not a real table engine but a
-teachable subset that genuinely works.
