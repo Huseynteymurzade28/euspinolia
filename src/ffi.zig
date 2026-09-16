@@ -13,6 +13,8 @@
 //! - Column data is handed out as borrowed pointers into the frame's arena.
 //!   They stay valid until `eus_frame_free`, and the caller must not write to
 //!   or free them.
+//! - The one buffer that is not borrowed is the CSV text from
+//!   `eus_frame_to_csv`; it is released with `eus_bytes_free`.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -23,6 +25,7 @@ const dtype = @import("dtype.zig");
 const filter = @import("filter.zig");
 const frame = @import("frame.zig");
 const groupby = @import("groupby.zig");
+const write = @import("write.zig");
 
 const DataFrame = frame.DataFrame;
 
@@ -391,6 +394,27 @@ export fn eus_frame_groupby(
     return publish(gpa, grouped, out_frame);
 }
 
+/// Serialises a frame to CSV text. On success `out_ptr` / `out_len` describe
+/// a buffer the caller must release with `eus_bytes_free`; on failure they
+/// are left untouched. The text is not null-terminated.
+export fn eus_frame_to_csv(
+    handle: *const DataFrame,
+    out_ptr: *?[*]u8,
+    out_len: *usize,
+) i32 {
+    const text = write.toOwnedSlice(allocator(), handle.*) catch |err|
+        return @intFromEnum(statusFor(err));
+    out_ptr.* = text.ptr;
+    out_len.* = text.len;
+    return @intFromEnum(Status.ok);
+}
+
+/// Releases a buffer from `eus_frame_to_csv`. Ignores null.
+export fn eus_bytes_free(ptr: ?[*]u8, len: usize) void {
+    const bytes = ptr orelse return;
+    allocator().free(bytes[0..len]);
+}
+
 const testing = std.testing;
 
 /// Mirrors what the Python layer does: parse, then read back through the ABI.
@@ -668,6 +692,22 @@ test "aggregate tags are the numbers Python expects" {
     try testing.expectEqual(@as(u8, 2), @intFromEnum(groupby.Func.min));
     try testing.expectEqual(@as(u8, 3), @intFromEnum(groupby.Func.max));
     try testing.expectEqual(@as(u8, 4), @intFromEnum(groupby.Func.count));
+}
+
+test "a frame crosses back out as CSV text" {
+    const df = try parseForTest("id,name\n1,\"a,b\"\n2,grace\n");
+    defer eus_frame_free(df);
+
+    var ptr: ?[*]u8 = null;
+    var len: usize = 0;
+    try testing.expectEqual(@as(i32, 0), eus_frame_to_csv(df, &ptr, &len));
+    defer eus_bytes_free(ptr, len);
+
+    try testing.expectEqualStrings("id,name\n1,\"a,b\"\n2,grace\n", ptr.?[0..len]);
+}
+
+test "freeing null bytes is a no-op" {
+    eus_bytes_free(null, 0);
 }
 
 test "operator tags are the numbers Python expects" {
