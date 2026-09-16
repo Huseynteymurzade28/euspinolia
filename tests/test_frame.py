@@ -1,4 +1,4 @@
-"""Phase 3-5 tests: reading CSV into a DataFrame from Python, and working on it.
+"""Phase 3-6 tests: reading CSV into a DataFrame from Python, and working on it.
 
 Run from the repo root:
     zig build && python3 -m unittest discover -s tests -v
@@ -568,6 +568,58 @@ class TestMemoryOwnership(unittest.TestCase):
         df = euspinolia.parse_csv("a\n1\n")
         df.close()
         self.assertIn("closed", repr(df))
+
+
+class TestToCsv(unittest.TestCase):
+    def test_returns_the_csv_as_a_string(self):
+        df = euspinolia.parse_csv(SAMPLE)
+        self.assertEqual(df.to_csv(), SAMPLE)
+
+    def test_writes_a_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "out.csv"
+            df = euspinolia.parse_csv(SAMPLE)
+            self.assertIsNone(df.to_csv(path))
+            self.assertEqual(path.read_text(encoding="utf-8"), SAMPLE)
+
+    def test_accepts_a_path_string(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "out.csv"
+            euspinolia.parse_csv("a\n1\n").to_csv(str(path))
+            self.assertEqual(path.read_text(encoding="utf-8"), "a\n1\n")
+
+    def test_quotes_only_what_needs_it(self):
+        df = euspinolia.parse_csv('s\n"a,b"\n"say ""hi"""\n"two\nlines"\nplain\n')
+        self.assertEqual(df.to_csv(), 's\n"a,b"\n"say ""hi"""\n"two\nlines"\nplain\n')
+
+    def test_round_trips_types(self):
+        df = euspinolia.parse_csv("n,x,s\n1,2.0,ada\n-2,0.5,\n")
+        again = euspinolia.parse_csv(df.to_csv())
+        self.assertEqual(again.dtypes, df.dtypes)
+        self.assertEqual(again["n"].to_list(), [1, -2])
+        self.assertEqual(again["x"].to_list(), [2.0, 0.5])
+        self.assertEqual(again["s"].to_list(), ["ada", ""])
+
+    def test_derived_frames_write_too(self):
+        df = euspinolia.parse_csv(SAMPLE)
+        self.assertEqual(df[df["age"] > 40].to_csv(), "name,age,score\ngrace,45,88.0\n")
+        self.assertEqual(
+            df.groupby("age").agg({"score": "sum"}).to_csv(),
+            "age,score\n36,91.5\n45,88.0\n29,73.25\n",
+        )
+
+    def test_header_only(self):
+        self.assertEqual(euspinolia.parse_csv("a,b\n").to_csv(), "a,b\n")
+
+    def test_unicode_survives(self):
+        df = euspinolia.parse_csv("şehir\nİstanbul\n")
+        self.assertEqual(df.to_csv(), "şehir\nİstanbul\n")
+
+    def test_needs_an_open_frame(self):
+        df = euspinolia.parse_csv("a\n1\n")
+        df.close()
+        with self.assertRaises(ValueError):
+            df.to_csv()
 
 
 class TestErrors(unittest.TestCase):

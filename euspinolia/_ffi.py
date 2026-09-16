@@ -249,6 +249,16 @@ def _declare_signatures(lib: ctypes.CDLL) -> None:
     ]
     lib.eus_frame_groupby.restype = ctypes.c_int32
 
+    lib.eus_frame_to_csv.argtypes = [
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(ctypes.c_size_t),
+    ]
+    lib.eus_frame_to_csv.restype = ctypes.c_int32
+
+    lib.eus_bytes_free.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
+    lib.eus_bytes_free.restype = None
+
 
 lib = _load()
 _declare_signatures(lib)

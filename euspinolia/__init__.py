@@ -521,6 +521,29 @@ class DataFrame:
         """
         return GroupBy(self, key)
 
+    def to_csv(self, path: str | os.PathLike[str] | None = None) -> str | None:
+        """Write the frame as CSV to `path`, or return it as a string if no path.
+
+        The whole serialisation happens in Zig; Python only writes the bytes
+        out. The output reads back as the same frame, types included: fields
+        are quoted only when they need to be, and floats always carry a `.`
+        or an exponent so they are not mistaken for integers.
+        """
+        handle = self._require_open()
+        pointer = ctypes.c_void_p()
+        length = ctypes.c_size_t()
+        check(lib.eus_frame_to_csv(handle, ctypes.byref(pointer), ctypes.byref(length)))
+        try:
+            data = ctypes.string_at(pointer, length.value)
+        finally:
+            lib.eus_bytes_free(pointer, length)
+
+        if path is None:
+            return data.decode("utf-8")
+        with open(path, "wb") as out:
+            out.write(data)
+        return None
+
     def close(self) -> None:
         """Release the Zig-side memory. Idempotent."""
         handle, self._handle = self._handle, None
