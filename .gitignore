@@ -19,3 +19,10 @@ roadmap.md
 
 # Scratch CSVs for poking at the library by hand
 data/
+
+# Packaging
+build/
+dist/
+euspinolia/*.so
+euspinolia/*.dylib
+euspinolia/*.dll

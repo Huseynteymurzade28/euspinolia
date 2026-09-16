@@ -1,0 +1,59 @@
+[build-system]
+requires = ["hatchling>=1.25", "ziglang==0.16.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "euspinolia"
+dynamic = ["version"]
+description = "A small Zig-accelerated CSV/table library: typed columns, filter, groupby, no dependencies"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.9"
+authors = [{ name = "Huseyn Teymurzade" }]
+keywords = ["csv", "dataframe", "zig", "ffi", "ctypes", "columnar"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Education",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Zig",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Software Development :: Libraries",
+    "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://github.com/Huseynteymurzade28/euspinolia"
+Documentation = "https://github.com/Huseynteymurzade28/euspinolia/tree/main/docs"
+Changelog = "https://github.com/Huseynteymurzade28/euspinolia/blob/main/CHANGELOG.md"
+Issues = "https://github.com/Huseynteymurzade28/euspinolia/issues"
+
+[tool.hatch.version]
+path = "euspinolia/_ffi.py"
+pattern = 'EXPECTED_VERSION = "(?P<version>[^"]+)"'
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "build.zig",
+    "build.zig.zon",
+    "hatch_build.py",
+    "src/",
+    "euspinolia/",
+    "tests/",
+    "bench/",
+    "docs/",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["euspinolia"]
+
+[tool.hatch.build.targets.wheel.hooks.custom]
+path = "hatch_build.py"
