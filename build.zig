@@ -25,10 +25,15 @@ pub fn build(b: *std.Build) void {
     // Debug too. `-Doptimize` still applies to both, for testing what ships.
     const test_optimize: std.builtin.OptimizeMode = requested orelse .Debug;
 
+    // Debug info is most of the library's size (3.7 MB against 0.5 MB
+    // without); the Python wheel builds with `-Dstrip=true`.
+    const strip = b.option(bool, "strip", "Omit debug info from the library (default: false)") orelse false;
+
     const mod = b.addModule("euspinolia", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = lib_optimize,
+        .strip = strip,
     });
 
     // Loaded by Python through ctypes.

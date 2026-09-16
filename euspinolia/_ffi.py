@@ -109,7 +109,12 @@ def _candidate_paths() -> list[Path]:
     if override:
         candidates.append(Path(override))
 
-    candidates.append(package_dir.parent / "zig-out" / "lib" / filename)
+    # A repo checkout after `zig build` (Windows puts DLLs under bin/), then
+    # the copy an installed wheel ships inside the package.
+    zig_out = package_dir.parent / "zig-out"
+    candidates.append(zig_out / "lib" / filename)
+    if sys.platform == "win32":
+        candidates.append(zig_out / "bin" / filename)
     candidates.append(package_dir / filename)
     return candidates
 
