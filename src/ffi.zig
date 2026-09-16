@@ -34,7 +34,9 @@ var debug_gpa: std.heap.DebugAllocator(.{}) = .init;
 // `smp_allocator` keys its per-thread state on a `threadlocal`, and TLS in a
 // DLL loaded through ctypes crashes on Windows/ARM64 with the current
 // toolchain; the same general-purpose allocator with safety off, guarded by
-// a mutex instead, stands in there.
+// a mutex instead, stands in there. `Io.Threaded` has the same problem, so
+// on that target the Python side reads files itself and calls
+// `eus_parse_csv` rather than `eus_read_csv`.
 const tls_is_broken = builtin.os.tag == .windows and builtin.cpu.arch == .aarch64;
 var release_gpa: std.heap.DebugAllocator(.{ .safety = false }) = .init;
 

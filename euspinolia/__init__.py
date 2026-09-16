@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import ctypes
 import os
+import platform
+import sys
 from typing import Any, Iterator
 
 from ._ffi import (
@@ -57,12 +59,25 @@ __all__ = [
 __version__ = EXPECTED_VERSION
 
 
+# Zig's file I/O keeps per-thread state in thread-local storage, which crashes
+# inside a ctypes-loaded DLL on Windows/ARM64 with the current toolchain. There
+# the file is read here and handed over as bytes; parsing is unaffected.
+_READ_FILES_IN_PYTHON = sys.platform == "win32" and platform.machine().upper() in ("ARM64", "AARCH64")
+
+
 def read_csv(path: str | os.PathLike[str]) -> DataFrame:
     """Parse a CSV file into a `DataFrame`.
 
     The file is read and parsed entirely on the Zig side; Python only ever
     sees the resulting columns.
     """
+    if _READ_FILES_IN_PYTHON:
+        with open(path, "rb") as file:
+            text = file.read()
+        handle = ctypes.c_void_p()
+        check(lib.eus_parse_csv(text, len(text), ctypes.byref(handle)), source=os.fspath(path))
+        return DataFrame(handle.value)
+
     handle = ctypes.c_void_p()
     encoded = os.fsencode(path)
     check(lib.eus_read_csv(encoded, len(encoded), ctypes.byref(handle)), source=os.fspath(path))
