@@ -1,8 +1,8 @@
 # euspinolia
 
 [![CI](https://github.com/Huseynteymurzade28/euspinolia/actions/workflows/ci.yml/badge.svg)](https://github.com/Huseynteymurzade28/euspinolia/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/euspinolia)](https://pypi.org/project/euspinolia/)
-[![Python](https://img.shields.io/pypi/pyversions/euspinolia)](https://pypi.org/project/euspinolia/)
+[![PyPI](https://img.shields.io/pypi/v/euspinolia?cacheSeconds=3600)](https://pypi.org/project/euspinolia/)
+[![Python](https://img.shields.io/pypi/pyversions/euspinolia?cacheSeconds=3600)](https://pypi.org/project/euspinolia/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 A small, educational CSV/table library with its engine in Zig and a thin
