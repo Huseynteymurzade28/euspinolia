@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.1 — 2026-09-19
 
 - Wheels for 32-bit ARM Linux (`armv7l`), so Raspberry Pi OS installs do
   not fall back to a source build; Zig 0.16.0 cannot build on a 32-bit host.
