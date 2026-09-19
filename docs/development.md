@@ -115,16 +115,23 @@ tags the wheel accordingly.
 |---|---|
 | `x86_64-linux` | `manylinux2014_x86_64.musllinux_1_1_x86_64` |
 | `aarch64-linux` | `manylinux2014_aarch64.musllinux_1_1_aarch64` |
+| `arm-linux-musleabihf` | `manylinux2014_armv7l.musllinux_1_1_armv7l` |
 | `x86_64-macos` | `macosx_11_0_x86_64` |
 | `aarch64-macos` | `macosx_11_0_arm64` |
 | `x86_64-windows` | `win_amd64` |
 | `aarch64-windows` | `win_arm64` |
 
 ```sh
-for t in x86_64-linux aarch64-linux x86_64-macos aarch64-macos x86_64-windows aarch64-windows; do
+for t in x86_64-linux aarch64-linux arm-linux-musleabihf x86_64-macos aarch64-macos x86_64-windows aarch64-windows; do
   EUSPINOLIA_TARGET=$t python -m build --wheel
 done
 ```
+
+The 32-bit ARM wheel exists because a source build is not an option there:
+Zig 0.16.0's own build runner does not compile on a 32-bit host, which is
+exactly what piwheels uses. The triple names the hard-float ABI explicitly
+since that decides how `f64` arguments cross the FFI boundary, and Raspberry
+Pi OS is armhf.
 
 `auditwheel show` on the Linux wheel confirms it: "requires no external
 shared libraries", consistent with `manylinux_2_5`. Because the package is

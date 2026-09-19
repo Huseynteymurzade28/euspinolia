@@ -20,10 +20,13 @@ from hatchling.builders.hooks.plugin.interface import BuildHookInterface
 
 # Zig target triple -> (wheel platform tag, library file name). The Linux
 # tags are honest: the library has no libc dependency, so it runs on any
-# glibc or musl system the tag admits.
+# glibc or musl system the tag admits. The 32-bit ARM triple spells out the
+# hard-float ABI because it decides how f64 arguments are passed, and that
+# has to match the armhf Python on Raspberry Pi OS.
 TARGETS = {
     "x86_64-linux": ("manylinux2014_x86_64.musllinux_1_1_x86_64", "libeuspinolia.so"),
     "aarch64-linux": ("manylinux2014_aarch64.musllinux_1_1_aarch64", "libeuspinolia.so"),
+    "arm-linux-musleabihf": ("manylinux2014_armv7l.musllinux_1_1_armv7l", "libeuspinolia.so"),
     "x86_64-macos": ("macosx_11_0_x86_64", "libeuspinolia.dylib"),
     "aarch64-macos": ("macosx_11_0_arm64", "libeuspinolia.dylib"),
     "x86_64-windows": ("win_amd64", "euspinolia.dll"),

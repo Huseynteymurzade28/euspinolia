@@ -47,8 +47,8 @@ The name comes from *Euspinolia*, the genus of the velvet ant known as the
 pip install euspinolia
 ```
 
-Wheels are published for Linux (x86_64, aarch64), macOS (x86_64, arm64)
-and Windows (x64, arm64), for any Python 3.9 or newer. On anything else,
+Wheels are published for Linux (x86_64, aarch64, armv7l), macOS (x86_64,
+arm64) and Windows (x64, arm64), for any Python 3.9 or newer. On anything else,
 `pip` builds from source; that needs no Zig install either, since the build
 pulls it from the `ziglang` package.
 
