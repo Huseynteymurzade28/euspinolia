@@ -87,7 +87,21 @@ df["age"]     # by name; KeyError if missing
 df[1]         # by position; negatives count from the end; IndexError if out of range
 ```
 
-Both return a `Column`.
+Both return a `Column`. A `bool` is refused with `TypeError` rather than
+read as position `0` or `1`.
+
+### Selecting columns
+
+```python
+df[["name", "age"]]          # a new DataFrame with those columns, in that order
+df.select(["name", "age"])   # the same thing, as a call
+df[[-1, "name"]]             # names and positions mix
+```
+
+The columns are copied in Zig, so the result owns its memory and outlives
+its source, like a filtered frame. Asking for the same column twice raises
+`ValueError`; an unknown name `KeyError`; a position out of range
+`IndexError`. An empty list gives a frame with the same rows and no columns.
 
 ### Selecting rows
 
