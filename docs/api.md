@@ -9,16 +9,26 @@ import euspinolia
 
 ## Reading
 
-### `read_csv(path) -> DataFrame`
+### `read_csv(path, *, delimiter=",") -> DataFrame`
 
 Parses a CSV file. `path` is a `str` or any `os.PathLike`. The file is read
 and parsed entirely on the Zig side; Python only ever sees the resulting
 columns.
 
+`delimiter` is one ASCII character other than `"`, `\r` or `\n`:
+
+```python
+euspinolia.read_csv("prices.csv", delimiter=";")   # the European spreadsheet export
+euspinolia.read_csv("people.tsv", delimiter="\t")  # TSV
+```
+
+A reserved or multi-byte character raises `ValueError`; anything but a `str`
+raises `TypeError`.
+
 Raises `FileNotFoundError`, `PermissionError`, `IsADirectoryError` or
 `OSError` for the usual file problems, and `ParseError` for malformed CSV.
 
-### `parse_csv(text) -> DataFrame`
+### `parse_csv(text, *, delimiter=",") -> DataFrame`
 
 Parses CSV that is already in memory, as `str` (encoded as UTF-8) or `bytes`.
 The bytes are copied into the frame's own memory, so the source may be
@@ -34,7 +44,8 @@ A deliberate subset of RFC 4180:
   quote. A quote inside an unquoted field is taken literally.
 - Records end with `\n` or `\r\n`; a trailing newline is optional.
 - Blank lines are skipped. Whitespace is never trimmed.
-- The delimiter is always `,`.
+- One delimiter for the whole input, `,` unless `delimiter` says otherwise.
+  Under any other delimiter a comma is ordinary text.
 
 Every column gets one type, inferred from its values and widening in the
 order `int → float → string`:
@@ -121,15 +132,17 @@ applies in one Zig call. See [`Condition`](#condition).
 Buckets the rows by one column, named or by position. Nothing is computed
 until you ask the `GroupBy` for an aggregate. See [`GroupBy`](#groupby).
 
-### `df.to_csv(path=None) -> str | None`
+### `df.to_csv(path=None, *, delimiter=",") -> str | None`
 
 Serialises the frame as CSV. With a `path`, writes the file and returns
-`None`; without one, returns the text as a `str`.
+`None`; without one, returns the text as a `str`. `delimiter` follows the
+same rules as for `read_csv`.
 
 The whole serialisation happens in Zig, and the output is exactly what the
 parser reads: a header, `\n` line endings, and a field quoted only when it
-holds a comma, a quote or a line break (with `"` doubled inside). Reading the
-output back gives the same frame, types included:
+holds the delimiter, a quote or a line break (with `"` doubled inside).
+Reading the output back with the same delimiter gives the same frame, types
+included:
 
 - Integers print as-is.
 - Floats print as the shortest decimal that reads back to the same value,
@@ -261,7 +274,7 @@ exceptions:
 | `FileNotFoundError`, `PermissionError`, `IsADirectoryError`, `OSError` | `read_csv` could not read the file |
 | `KeyError`, `IndexError` | no such column, or a row/column position out of range |
 | `TypeError` | arithmetic on a text column, comparing text with a number, aggregating a text column, `bool(condition)`, `a \| b` |
-| `ValueError` | a closed frame, an empty column reduced, an unknown operator or aggregate, mixing frames in a condition |
+| `ValueError` | a closed frame, an empty column reduced, an unknown operator or aggregate, mixing frames in a condition, a delimiter that is reserved or not one ASCII character |
 | `OverflowError` | an integer sum that leaves the 64-bit range |
 | `MemoryError` | the Zig side ran out of memory |
 | `LibraryNotFoundError` (subclass of `RuntimeError`) | the shared library could not be located at import time |

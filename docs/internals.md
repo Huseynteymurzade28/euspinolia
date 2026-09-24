@@ -42,7 +42,10 @@ The parser accepts the subset of RFC 4180 listed in the
 [API reference](api.md#what-counts-as-csv) and rejects the rest with a typed
 error (`UnterminatedQuote`, `UnexpectedCharacterAfterQuote`,
 `InconsistentFieldCount`, `MissingHeader`) that `ffi.zig` later maps to a
-status code.
+status code. The delimiter arrives in `csv.Options` as a single byte, which
+keeps the scanner's inner loop a comparison against two constants; a quote
+or a line break is refused up front with `InvalidDelimiter`, since either
+would make the grammar ambiguous.
 
 The `Table` is only a staging form. It exists so that type inference can see
 a whole column before anything is allocated for it.
