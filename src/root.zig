@@ -1,10 +1,10 @@
 //! euspinolia core.
 //!
 //! The library layer lives in `csv`, `dtype`, `frame`, `agg`, `filter`,
-//! `groupby` and `write`; `ffi` exposes it across the C ABI. The handful of exports here
-//! are the original bridge smoke-tests, kept because `self_check` still uses
-//! them to catch a stale library. Every exported symbol is prefixed with
-//! `eus_`.
+//! `sort`, `groupby` and `write`; `ffi` exposes it across the C ABI. The
+//! handful of exports here are the original bridge smoke-tests, kept because
+//! `self_check` still uses them to catch a stale library. Every exported
+//! symbol is prefixed with `eus_`.
 
 const std = @import("std");
 
@@ -13,6 +13,7 @@ pub const dtype = @import("dtype.zig");
 pub const frame = @import("frame.zig");
 pub const agg = @import("agg.zig");
 pub const filter = @import("filter.zig");
+pub const sort = @import("sort.zig");
 pub const groupby = @import("groupby.zig");
 pub const write = @import("write.zig");
 pub const ffi = @import("ffi.zig");

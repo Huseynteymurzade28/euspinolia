@@ -164,6 +164,36 @@ pub const DataFrame = struct {
         return result;
     }
 
+    /// A new frame whose row `i` is row `order[i]` of this one. `order` may
+    /// be any length and repeat rows; every entry must be in range. This is
+    /// the gather step behind sorting.
+    pub fn reorder(self: DataFrame, gpa: Allocator, order: []const usize) !DataFrame {
+        var result: DataFrame = .{
+            .arena = .init(gpa),
+            .names = &.{},
+            .columns = &.{},
+            .row_count = order.len,
+        };
+        errdefer result.arena.deinit();
+        const arena = result.arena.allocator();
+
+        const names = try arena.alloc([]const u8, self.columns.len);
+        for (names, self.names) |*name, source| name.* = try arena.dupe(u8, source);
+        result.names = names;
+
+        const columns = try arena.alloc(Column, self.columns.len);
+        for (columns, self.columns) |*slot, source| {
+            slot.* = switch (source) {
+                .int => |values| .{ .int = try permute(i64, arena, values, order) },
+                .float => |values| .{ .float = try permute(f64, arena, values, order) },
+                .string => |values| .{ .string = try permuteStrings(arena, values, order) },
+            };
+        }
+        result.columns = columns;
+
+        return result;
+    }
+
     /// A new frame holding the columns at `indices`, in that order. Like
     /// `take`, the result owns its own copies. Every index must be in range;
     /// repeats are allowed here and left to the caller to refuse.
@@ -304,6 +334,31 @@ fn gather(
         at += @intFromBool(keep);
     }
     return out[0..kept];
+}
+
+fn permute(comptime T: type, arena: Allocator, values: []const T, order: []const usize) ![]const T {
+    const out = try arena.alloc(T, order.len);
+    for (out, order) |*slot, row| slot.* = values[row];
+    return out;
+}
+
+fn permuteStrings(arena: Allocator, column: StringColumn, order: []const usize) !StringColumn {
+    var total: usize = 0;
+    for (order) |row| total += column.get(row).len;
+
+    const data = try arena.alloc(u8, total);
+    const offsets = try arena.alloc(usize, order.len + 1);
+
+    var at: usize = 0;
+    for (order, 0..) |row, i| {
+        const text = column.get(row);
+        offsets[i] = at;
+        @memcpy(data[at..][0..text.len], text);
+        at += text.len;
+    }
+    offsets[order.len] = at;
+
+    return .{ .offsets = offsets, .data = data };
 }
 
 fn gatherStrings(
@@ -564,4 +619,16 @@ test "select with no columns keeps the row count" {
 
     try testing.expectEqual(@as(usize, 0), none.columnCount());
     try testing.expectEqual(@as(usize, 2), none.rowCount());
+}
+
+test "reorder gathers rows by position, repeats included" {
+    var df = try DataFrame.parse(testing.allocator, "n,s\n1,ada\n2,\n3,grace\n", .{});
+    defer df.deinit();
+    var out = try df.reorder(testing.allocator, &.{ 2, 0, 2 });
+    defer out.deinit();
+
+    try testing.expectEqual(@as(usize, 3), out.rowCount());
+    try testing.expectEqualSlices(i64, &.{ 3, 1, 3 }, out.ints(0).?);
+    try testing.expectEqualSlices(usize, &.{ 0, 5, 8, 13 }, out.strings(1).?.offsets);
+    try testing.expectEqualStrings("graceadagrace", out.strings(1).?.data);
 }

@@ -5,8 +5,8 @@
 //! - Every symbol is prefixed with `eus_`.
 //! - A `DataFrame` crosses the boundary as an opaque pointer. It is created by
 //!   `eus_read_csv` / `eus_parse_csv` / `eus_frame_filter_*` /
-//!   `eus_frame_select` / `eus_frame_groupby` and must be released with
-//!   `eus_frame_free`; nothing else owns it.
+//!   `eus_frame_select` / `eus_frame_sort` / `eus_frame_groupby` and must be
+//!   released with `eus_frame_free`; nothing else owns it.
 //! - Functions that can fail return an `i32` status (`Status`) and write their
 //!   result through an out-parameter. Zig error sets do not survive the C ABI,
 //!   so every error is mapped to a status code once, here.
@@ -25,6 +25,7 @@ const dtype = @import("dtype.zig");
 const filter = @import("filter.zig");
 const frame = @import("frame.zig");
 const groupby = @import("groupby.zig");
+const sort = @import("sort.zig");
 const write = @import("write.zig");
 
 const DataFrame = frame.DataFrame;
@@ -397,6 +398,24 @@ export fn eus_frame_select(
     return publish(gpa, picked, out_frame);
 }
 
+/// Builds a new frame with the rows sorted by column `index`, stably;
+/// `descending` is 0 or 1. The result is independent of `handle` and must be
+/// released with `eus_frame_free`; on failure `out_frame` is left untouched.
+export fn eus_frame_sort(
+    handle: *const DataFrame,
+    index: usize,
+    descending: u8,
+    out_frame: *?*DataFrame,
+) i32 {
+    if (index >= handle.columnCount()) return @intFromEnum(Status.column_out_of_range);
+
+    const gpa = allocator();
+    const sorted = sort.sortBy(gpa, handle.*, index, descending != 0) catch |err|
+        return @intFromEnum(statusFor(err));
+
+    return publish(gpa, sorted, out_frame);
+}
+
 /// Groups by column `key` and reduces `spec_count` columns per group, one
 /// output column per `(columns[i], funcs[i])` pair; `funcs` are `groupby.Func`
 /// tags. The result is a new frame — see `groupby.groupBy` for its shape —
@@ -691,6 +710,23 @@ test "select refuses an out-of-range column" {
         eus_frame_select(df, &[_]usize{ 0, 1 }, 2, &handle),
     );
     try testing.expect(handle == null);
+}
+
+test "sort crosses the boundary as a new, independent frame" {
+    const df = try parseForTest("n,s\n2,b\n1,a\n3,c\n");
+
+    var handle: ?*DataFrame = null;
+    try testing.expectEqual(@as(i32, 0), eus_frame_sort(df, 0, 1, &handle));
+    const sorted = handle.?;
+    defer eus_frame_free(sorted);
+    eus_frame_free(df);
+
+    try testing.expectEqualSlices(i64, &.{ 3, 2, 1 }, eus_frame_ints(sorted, 0).?[0..3]);
+
+    try testing.expectEqual(
+        @intFromEnum(Status.column_out_of_range),
+        eus_frame_sort(sorted, 5, 0, &handle),
+    );
 }
 
 test "groupby crosses the boundary as a new, independent frame" {

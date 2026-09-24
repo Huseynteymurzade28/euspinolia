@@ -485,6 +485,57 @@ GROUPED = (
 )
 
 
+class TestSortValues(unittest.TestCase):
+    def setUp(self):
+        self.df = euspinolia.parse_csv(SAMPLE)
+
+    def test_ascending(self):
+        self.assertEqual(self.df.sort_values("age")["age"].to_list(), [29, 36, 45])
+
+    def test_descending(self):
+        ordered = self.df.sort_values("score", ascending=False)
+        self.assertEqual(ordered["name"].to_list(), ["ada", "grace", "Doe, John"])
+
+    def test_every_column_moves_with_its_key(self):
+        ordered = self.df.sort_values("age")
+        self.assertEqual(ordered.row(0), ("Doe, John", 29, 73.25))
+
+    def test_text_sorts_bytewise(self):
+        df = euspinolia.parse_csv('s\nb\nB\na\n""\n')
+        self.assertEqual(df.sort_values("s")["s"].to_list(), ["", "B", "a", "b"])
+
+    def test_stable_for_two_keys(self):
+        df = euspinolia.parse_csv("city,age\nrome,40\nparis,30\nrome,20\nparis,50\n")
+        by_age = df.sort_values("age")
+        both = by_age.sort_values("city")
+        self.assertEqual(both.head(), [("paris", 30), ("paris", 50), ("rome", 20), ("rome", 40)])
+
+    def test_stable_descending(self):
+        df = euspinolia.parse_csv("k,n\n1,a\n2,b\n1,c\n2,d\n")
+        self.assertEqual(df.sort_values("k", ascending=False)["n"].to_list(), ["b", "d", "a", "c"])
+
+    def test_matches_python(self):
+        values = [5, -3, 12, 0, 7, -3]
+        df = euspinolia.parse_csv("n\n" + "".join(f"{v}\n" for v in values))
+        self.assertEqual(df.sort_values(0)["n"].to_list(), sorted(values))
+
+    def test_result_outlives_the_source(self):
+        ordered = self.df.sort_values("age")
+        self.df.close()
+        self.assertEqual(ordered["age"][0], 29)
+
+    def test_empty_frame(self):
+        self.assertEqual(euspinolia.parse_csv("a\n").sort_values("a").shape, (0, 1))
+
+    def test_unknown_column_raises(self):
+        with self.assertRaises(KeyError):
+            self.df.sort_values("missing")
+
+    def test_ascending_is_keyword_only(self):
+        with self.assertRaises(TypeError):
+            self.df.sort_values("age", False)  # type: ignore[misc]
+
+
 class TestGroupBy(unittest.TestCase):
     def setUp(self):
         self.df = euspinolia.parse_csv(GROUPED)

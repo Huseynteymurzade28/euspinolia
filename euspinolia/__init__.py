@@ -577,6 +577,22 @@ class DataFrame:
         check(code, source=f"{name} {op} {value!r}")
         return DataFrame(out.value)
 
+    def sort_values(self, by: str | int, *, ascending: bool = True) -> DataFrame:
+        """The rows ordered by one column, as a new `DataFrame`.
+
+        The sort runs in Zig and is stable in both directions: rows with
+        equal keys keep their order, so sorting by a second key and then by
+        the first gives a two-key order. Text sorts bytewise.
+        """
+        index = self._column_index(by)
+        handle = self._require_open()
+        out = ctypes.c_void_p()
+        check(
+            lib.eus_frame_sort(handle, index, 0 if ascending else 1, ctypes.byref(out)),
+            source=f"sort_values({self._columns[index]!r})",
+        )
+        return DataFrame(out.value)
+
     def groupby(self, key: str | int) -> GroupBy:
         """Bucket the rows by one column; see `GroupBy` for what to do next.
 

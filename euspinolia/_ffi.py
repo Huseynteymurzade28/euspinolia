@@ -256,6 +256,9 @@ def _declare_signatures(lib: ctypes.CDLL) -> None:
     ]
     lib.eus_frame_select.restype = ctypes.c_int32
 
+    lib.eus_frame_sort.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_uint8, frame_out]
+    lib.eus_frame_sort.restype = ctypes.c_int32
+
     # One output column per (column, function) pair, passed as two parallel
     # arrays so the call count stays at one whatever the number of specs.
     lib.eus_frame_groupby.argtypes = [
