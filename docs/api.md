@@ -34,6 +34,33 @@ Parses CSV that is already in memory, as `str` (encoded as UTF-8) or `bytes`.
 The bytes are copied into the frame's own memory, so the source may be
 discarded as soon as this returns.
 
+### `from_dict(data) -> DataFrame`
+
+Builds a frame from data already in Python: a mapping of column names to
+any iterable of values. Every column must have the same length.
+
+```python
+df = euspinolia.from_dict({"name": ["ada", "grace"], "age": [36, 45], "score": [91.5, 88]})
+df.dtypes   # (string, int, float)
+```
+
+Each column's type follows from its **values**, not from their text:
+
+| values | column |
+|---|---|
+| only `int` | `int` |
+| `int` and `float` | `float` |
+| only `str` | `string` — `"01234"` stays text, unlike in a parsed file |
+| none at all | `string`, as for a header-only file |
+
+What the library cannot store is refused rather than converted: `None` and
+`bool` (`TypeError`), text mixed with numbers (`TypeError`), `nan` and `inf`
+(`ValueError`), an integer outside 64 bits (`OverflowError`), columns of
+different lengths (`ValueError`), and a non-`str` column name or a bare
+string as a column's values (`TypeError`).
+
+Everything is copied into the frame's memory in one Zig call.
+
 ### What counts as CSV
 
 A deliberate subset of RFC 4180:
@@ -64,7 +91,8 @@ A header-only input gives a frame with zero rows and every column typed
 
 ## `DataFrame`
 
-The result of `read_csv`, `parse_csv`, a filter, a groupby, or nothing else.
+The result of `read_csv`, `parse_csv`, `from_dict`, or of a selection, a
+filter, a sort or a groupby on another frame.
 It owns memory on the Zig side; see [Memory](#memory) for when that is
 released.
 
@@ -109,6 +137,11 @@ its source, like a filtered frame. Asking for the same column twice raises
 df.row(0)      # one row as a tuple, in column order; negatives allowed
 df.head(2)     # the first n rows (default 5) as a list of tuples
 ```
+
+### `df.to_dict() -> dict[str, list]`
+
+Every column as a plain list, keyed by name, in column order.
+`from_dict(df.to_dict())` gives back the same frame, types included.
 
 ### `df.filter(column, op, value) -> DataFrame`
 
@@ -309,9 +342,9 @@ exceptions:
 | `ParseError` (subclass of `ValueError`) | malformed CSV: a ragged row, an unterminated quote, a stray character after a closing quote, no header |
 | `FileNotFoundError`, `PermissionError`, `IsADirectoryError`, `OSError` | `read_csv` could not read the file |
 | `KeyError`, `IndexError` | no such column, or a row/column position out of range |
-| `TypeError` | arithmetic on a text column, comparing text with a number, aggregating a text column, `bool(condition)`, `a \| b` |
-| `ValueError` | a closed frame, an empty column reduced, an unknown operator or aggregate, mixing frames in a condition, a delimiter that is reserved or not one ASCII character |
-| `OverflowError` | an integer sum that leaves the 64-bit range |
+| `TypeError` | arithmetic on a text column, comparing text with a number, aggregating a text column, `bool(condition)`, `a \| b`, a `from_dict` value that is not `int`, `float` or `str` |
+| `ValueError` | a closed frame, an empty column reduced, an unknown operator or aggregate, mixing frames in a condition, a delimiter that is reserved or not one ASCII character, `from_dict` columns of different lengths or holding `nan`/`inf` |
+| `OverflowError` | an integer sum that leaves the 64-bit range, a `from_dict` integer outside 64 bits |
 | `MemoryError` | the Zig side ran out of memory |
 | `LibraryNotFoundError` (subclass of `RuntimeError`) | the shared library could not be located at import time |
 

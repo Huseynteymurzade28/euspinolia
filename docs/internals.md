@@ -75,6 +75,13 @@ A filter or an aggregate then walks one contiguous array instead of hopping
 between per-row allocations, and Python reads a numeric column as a flat
 buffer without copying.
 
+`DataFrame.fromColumns` is the other way in: it copies columns that are
+already laid out — by `select`, or by Python for `from_dict`, which builds
+the `[]i64`, `[]f64` or offsets-plus-bytes buffers with `ctypes` and hands
+them over in one `eus_frame_from_columns` call. Since those buffers come
+from outside, the ABI checks that string offsets start at zero, never run
+backwards and end at the data length before trusting them.
+
 Every frame owns its data in its own `ArenaAllocator`, so the `Table` it
 came from is freed immediately after conversion, and freeing a frame is one
 `arena.deinit()`. The frames a filter or a groupby produce get their own
@@ -172,7 +179,8 @@ collects the text into one buffer for the ABI.
 The whole surface Python calls, and it keeps three rules:
 
 - A frame crosses as an opaque pointer, created by `eus_read_csv`,
-  `eus_parse_csv`, `eus_frame_filter_*`, `eus_frame_select`,
+  `eus_parse_csv`, `eus_frame_from_columns`, `eus_frame_filter_*`,
+  `eus_frame_select`,
   `eus_frame_sort` or `eus_frame_groupby` and released by
   `eus_frame_free`. Nothing else owns it.
 - Zig error sets do not survive the C ABI, so fallible functions return an
