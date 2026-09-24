@@ -65,31 +65,50 @@ __version__ = EXPECTED_VERSION
 _READ_FILES_IN_PYTHON = sys.platform == "win32" and platform.machine().upper() in ("ARM64", "AARCH64")
 
 
-def read_csv(path: str | os.PathLike[str]) -> DataFrame:
+def read_csv(path: str | os.PathLike[str], *, delimiter: str = ",") -> DataFrame:
     """Parse a CSV file into a `DataFrame`.
 
     The file is read and parsed entirely on the Zig side; Python only ever
-    sees the resulting columns.
+    sees the resulting columns. `delimiter` is one ASCII character other than
+    a quote or a line break: `";"`, or `"\t"` for TSV.
     """
+    separator = _delimiter_byte(delimiter)
     if _READ_FILES_IN_PYTHON:
         with open(path, "rb") as file:
             text = file.read()
         handle = ctypes.c_void_p()
-        check(lib.eus_parse_csv(text, len(text), ctypes.byref(handle)), source=os.fspath(path))
+        check(
+            lib.eus_parse_csv(text, len(text), separator, ctypes.byref(handle)),
+            source=os.fspath(path),
+        )
         return DataFrame(handle.value)
 
     handle = ctypes.c_void_p()
     encoded = os.fsencode(path)
-    check(lib.eus_read_csv(encoded, len(encoded), ctypes.byref(handle)), source=os.fspath(path))
+    check(
+        lib.eus_read_csv(encoded, len(encoded), separator, ctypes.byref(handle)),
+        source=os.fspath(path),
+    )
     return DataFrame(handle.value)
 
 
-def parse_csv(text: str | bytes) -> DataFrame:
+def parse_csv(text: str | bytes, *, delimiter: str = ",") -> DataFrame:
     """Parse CSV text already in memory into a `DataFrame`."""
+    separator = _delimiter_byte(delimiter)
     encoded = text.encode("utf-8") if isinstance(text, str) else text
     handle = ctypes.c_void_p()
-    check(lib.eus_parse_csv(encoded, len(encoded), ctypes.byref(handle)))
+    check(lib.eus_parse_csv(encoded, len(encoded), separator, ctypes.byref(handle)))
     return DataFrame(handle.value)
+
+
+def _delimiter_byte(delimiter: str) -> int:
+    # The scanner splits on one byte, so a multi-byte UTF-8 character can only
+    # be refused here; quotes and line breaks are refused on the Zig side.
+    if not isinstance(delimiter, str):
+        raise TypeError(f"delimiter must be a str, not {type(delimiter).__name__}")
+    if len(delimiter) != 1 or not delimiter.isascii():
+        raise ValueError(f"delimiter must be a single ASCII character, not {delimiter!r}")
+    return ord(delimiter)
 
 
 # Operator tags as `filter.Op` in src/filter.zig; there is a test pinning them.
@@ -536,18 +555,24 @@ class DataFrame:
         """
         return GroupBy(self, key)
 
-    def to_csv(self, path: str | os.PathLike[str] | None = None) -> str | None:
+    def to_csv(
+        self, path: str | os.PathLike[str] | None = None, *, delimiter: str = ","
+    ) -> str | None:
         """Write the frame as CSV to `path`, or return it as a string if no path.
 
         The whole serialisation happens in Zig; Python only writes the bytes
-        out. The output reads back as the same frame, types included: fields
-        are quoted only when they need to be, and floats always carry a `.`
-        or an exponent so they are not mistaken for integers.
+        out. The output reads back as the same frame, types included, given
+        the same `delimiter`: fields are quoted only when they need to be, and
+        floats always carry a `.` or an exponent so they are not mistaken for
+        integers.
         """
+        separator = _delimiter_byte(delimiter)
         handle = self._require_open()
         pointer = ctypes.c_void_p()
         length = ctypes.c_size_t()
-        check(lib.eus_frame_to_csv(handle, ctypes.byref(pointer), ctypes.byref(length)))
+        check(
+            lib.eus_frame_to_csv(handle, separator, ctypes.byref(pointer), ctypes.byref(length))
+        )
         try:
             data = ctypes.string_at(pointer, length.value)
         finally:

@@ -129,7 +129,7 @@ test "every operator on an integer column" {
 }
 
 test "every operator on a string column" {
-    var df = try DataFrame.parse(testing.allocator, "s\nada\nbob\ncy\n");
+    var df = try DataFrame.parse(testing.allocator, "s\nada\nbob\ncy\n", .{});
     defer df.deinit();
 
     const expectations = [_]struct { Op, [3]bool }{
@@ -162,7 +162,7 @@ test "numbers compare across int and float" {
 }
 
 test "string order is bytewise, so a prefix sorts first" {
-    var df = try DataFrame.parse(testing.allocator, "s\nab\nabc\na\n");
+    var df = try DataFrame.parse(testing.allocator, "s\nab\nabc\na\n", .{});
     defer df.deinit();
 
     const mask = try maskOf(df.column(0), .lt, .{ .string = "abc" });
@@ -171,7 +171,7 @@ test "string order is bytewise, so a prefix sorts first" {
 }
 
 test "comparing across text and numbers is an error" {
-    var df = try DataFrame.parse(testing.allocator, "n,s\n1,ada\n");
+    var df = try DataFrame.parse(testing.allocator, "n,s\n1,ada\n", .{});
     defer df.deinit();
     var mask: [1]bool = undefined;
 
@@ -201,7 +201,7 @@ test "a NaN on the right matches nothing but ne" {
 }
 
 test "filter returns a frame with only the matching rows" {
-    var df = try DataFrame.parse(testing.allocator, "name,age\nada,36\ngrace,45\njohn,29\n");
+    var df = try DataFrame.parse(testing.allocator, "name,age\nada,36\ngrace,45\njohn,29\n", .{});
     defer df.deinit();
 
     var adults = try filter(testing.allocator, df, 1, .ge, .{ .int = 35 });
@@ -215,7 +215,7 @@ test "filter returns a frame with only the matching rows" {
 }
 
 test "filter can match nothing or everything" {
-    var df = try DataFrame.parse(testing.allocator, "n\n1\n2\n");
+    var df = try DataFrame.parse(testing.allocator, "n\n1\n2\n", .{});
     defer df.deinit();
 
     var none = try filter(testing.allocator, df, 0, .gt, .{ .int = 5 });
@@ -229,7 +229,7 @@ test "filter can match nothing or everything" {
 }
 
 test "filter on an empty frame is an empty frame" {
-    var df = try DataFrame.parse(testing.allocator, "a\n");
+    var df = try DataFrame.parse(testing.allocator, "a\n", .{});
     defer df.deinit();
 
     var out = try filter(testing.allocator, df, 0, .eq, .{ .string = "x" });
@@ -238,7 +238,7 @@ test "filter on an empty frame is an empty frame" {
 }
 
 test "filter propagates a type mismatch" {
-    var df = try DataFrame.parse(testing.allocator, "s\nada\n");
+    var df = try DataFrame.parse(testing.allocator, "s\nada\n", .{});
     defer df.deinit();
 
     try testing.expectError(
@@ -256,7 +256,7 @@ test "filters a large frame" {
     var buf: [32]u8 = undefined;
     for (0..10_000) |i| try text.appendSlice(gpa, try std.fmt.bufPrint(&buf, "{d}\n", .{i}));
 
-    var df = try DataFrame.parse(gpa, text.items);
+    var df = try DataFrame.parse(gpa, text.items, .{});
     defer df.deinit();
 
     var out = try filter(gpa, df, 0, .ge, .{ .int = 9_000 });

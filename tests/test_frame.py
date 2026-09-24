@@ -56,6 +56,63 @@ class TestReadCsv(unittest.TestCase):
         self.assertEqual(df.head(), [])
 
 
+class TestDelimiter(unittest.TestCase):
+    def test_semicolons(self):
+        df = euspinolia.parse_csv("name;price\nada;1,5\n", delimiter=";")
+        self.assertEqual(df.columns, ("name", "price"))
+        self.assertEqual(df["price"][0], "1,5")
+
+    def test_tabs(self):
+        df = euspinolia.parse_csv("a\tb\n1\t2.5\n", delimiter="\t")
+        self.assertEqual(df.row(0), (1, 2.5))
+
+    def test_reads_a_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "people.tsv"
+            path.write_text("name\tage\nDoe, John\t29\n", encoding="utf-8")
+            df = euspinolia.read_csv(path, delimiter="\t")
+            self.assertEqual(df.row(0), ("Doe, John", 29))
+
+    def test_quoted_fields_carry_the_delimiter(self):
+        df = euspinolia.parse_csv('a|b\n"x|y"|1\n', delimiter="|")
+        self.assertEqual(df["a"][0], "x|y")
+
+    def test_commas_are_plain_text_under_another_delimiter(self):
+        df = euspinolia.parse_csv("a,b;c\n1,2;3\n", delimiter=";")
+        self.assertEqual(df.columns, ("a,b", "c"))
+
+    def test_to_csv_round_trips(self):
+        df = euspinolia.parse_csv(SAMPLE)
+        text = df.to_csv(delimiter=";")
+        self.assertEqual(text.splitlines()[0], "name;age;score")
+        self.assertIn("\nDoe, John;29;73.25\n", text)
+        again = euspinolia.parse_csv(text, delimiter=";")
+        self.assertEqual(again.dtypes, df.dtypes)
+        self.assertEqual(again["name"].to_list(), df["name"].to_list())
+
+    def test_to_csv_quotes_the_new_delimiter(self):
+        df = euspinolia.parse_csv("s\nx;y\n")
+        self.assertEqual(df.to_csv(delimiter=";"), 's\n"x;y"\n')
+
+    def test_reserved_characters_raise(self):
+        for delimiter in ('"', "\n", "\r"):
+            with self.assertRaises(ValueError):
+                euspinolia.parse_csv("a\n1\n", delimiter=delimiter)
+            with self.assertRaises(ValueError):
+                euspinolia.parse_csv("a\n1\n").to_csv(delimiter=delimiter)
+
+    def test_must_be_one_ascii_character(self):
+        for delimiter in ("", ";;", "§"):
+            with self.assertRaises(ValueError):
+                euspinolia.parse_csv("a\n1\n", delimiter=delimiter)
+        with self.assertRaises(TypeError):
+            euspinolia.parse_csv("a\n1\n", delimiter=b";")  # type: ignore[arg-type]
+
+    def test_is_keyword_only(self):
+        with self.assertRaises(TypeError):
+            euspinolia.parse_csv("a\n1\n", ";")  # type: ignore[misc]
+
+
 class TestTypeInference(unittest.TestCase):
     def test_infers_a_type_per_column(self):
         df = euspinolia.parse_csv(SAMPLE)

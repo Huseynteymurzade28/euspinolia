@@ -113,7 +113,7 @@ const testing = std.testing;
 const DataFrame = frame.DataFrame;
 
 fn columnOf(text: []const u8) !DataFrame {
-    return DataFrame.parse(testing.allocator, text);
+    return DataFrame.parse(testing.allocator, text, .{});
 }
 
 test "sums an integer column" {
@@ -220,7 +220,7 @@ test "reduces a large column" {
     var buf: [32]u8 = undefined;
     for (1..10_001) |i| try text.appendSlice(gpa, try std.fmt.bufPrint(&buf, "{d}\n", .{i}));
 
-    var df = try DataFrame.parse(gpa, text.items);
+    var df = try DataFrame.parse(gpa, text.items, .{});
     defer df.deinit();
 
     try testing.expectEqual(Value{ .int = 10_000 * 10_001 / 2 }, try sum(df.column(0)));

@@ -3,30 +3,32 @@
 //! The output is the subset of RFC 4180 the parser reads: a header record,
 //! `\n` line endings, and a field quoted only when it needs to be — when it
 //! holds the delimiter, a quote, or a line break. Reading the result back
-//! yields the same frame, types included.
+//! with the same delimiter yields the same frame, types included.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
 
+const csv = @import("csv.zig");
 const frame = @import("frame.zig");
 const DataFrame = frame.DataFrame;
 
-/// Writes `df` as CSV to `w`.
-pub fn write(df: DataFrame, w: *Writer) Writer.Error!void {
+/// Writes `df` as CSV to `w`. `options` must already be valid.
+pub fn write(df: DataFrame, w: *Writer, options: csv.Options) Writer.Error!void {
+    const delimiter = options.delimiter;
     for (df.names, 0..) |name, i| {
-        if (i > 0) try w.writeByte(',');
-        try writeField(w, name);
+        if (i > 0) try w.writeByte(delimiter);
+        try writeField(w, name, delimiter);
     }
     try w.writeByte('\n');
 
     for (0..df.rowCount()) |row| {
         for (df.columns, 0..) |column, i| {
-            if (i > 0) try w.writeByte(',');
+            if (i > 0) try w.writeByte(delimiter);
             switch (column) {
                 .int => |values| try w.print("{d}", .{values[row]}),
                 .float => |values| try writeFloat(w, values[row]),
-                .string => |values| try writeField(w, values.get(row)),
+                .string => |values| try writeField(w, values.get(row), delimiter),
             }
         }
         try w.writeByte('\n');
@@ -34,15 +36,17 @@ pub fn write(df: DataFrame, w: *Writer) Writer.Error!void {
 }
 
 /// `df` as CSV in a buffer the caller owns and frees with `gpa`.
-pub fn toOwnedSlice(gpa: Allocator, df: DataFrame) Allocator.Error![]u8 {
+pub fn toOwnedSlice(gpa: Allocator, df: DataFrame, options: csv.Options) ![]u8 {
+    try options.validate();
     var out: Writer.Allocating = .init(gpa);
     defer out.deinit();
-    write(df, &out.writer) catch return error.OutOfMemory;
+    write(df, &out.writer, options) catch return error.OutOfMemory;
     return out.toOwnedSlice();
 }
 
-fn writeField(w: *Writer, text: []const u8) Writer.Error!void {
-    if (std.mem.indexOfAny(u8, text, ",\"\r\n") == null) return w.writeAll(text);
+fn writeField(w: *Writer, text: []const u8, delimiter: u8) Writer.Error!void {
+    const special = [_]u8{ delimiter, '"', '\r', '\n' };
+    if (std.mem.indexOfAny(u8, text, &special) == null) return w.writeAll(text);
 
     try w.writeByte('"');
     var rest = text;
@@ -77,9 +81,9 @@ fn writeFloat(w: *Writer, value: f64) Writer.Error!void {
 const testing = std.testing;
 
 fn roundTrip(text: []const u8) ![]u8 {
-    var df = try DataFrame.parse(testing.allocator, text);
+    var df = try DataFrame.parse(testing.allocator, text, .{});
     defer df.deinit();
-    return toOwnedSlice(testing.allocator, df);
+    return toOwnedSlice(testing.allocator, df, .{});
 }
 
 test "writes a header and one record per row" {
@@ -111,22 +115,41 @@ test "floats keep their type across a round trip" {
     defer testing.allocator.free(out);
     try testing.expectEqualStrings("x\n88.0\n-0.0\n0.1\n1e300\n1e-5\n123456789.25\n", out);
 
-    var again = try DataFrame.parse(testing.allocator, out);
+    var again = try DataFrame.parse(testing.allocator, out, .{});
     defer again.deinit();
     try testing.expectEqualSlices(f64, &.{ 88.0, -0.0, 0.1, 1e300, 0.00001, 123456789.25 }, again.floats(0).?);
 }
 
 test "a written frame parses back to the same frame" {
-    var df = try DataFrame.parse(testing.allocator, "n,x,s\n1,0.5,\"a,b\"\n-2,2.5,\n3,-1.25,q\"q\n");
+    var df = try DataFrame.parse(testing.allocator, "n,x,s\n1,0.5,\"a,b\"\n-2,2.5,\n3,-1.25,q\"q\n", .{});
     defer df.deinit();
-    const out = try toOwnedSlice(testing.allocator, df);
+    const out = try toOwnedSlice(testing.allocator, df, .{});
     defer testing.allocator.free(out);
 
-    var again = try DataFrame.parse(testing.allocator, out);
+    var again = try DataFrame.parse(testing.allocator, out, .{});
     defer again.deinit();
 
     try testing.expectEqualSlices(i64, df.ints(0).?, again.ints(0).?);
     try testing.expectEqualSlices(f64, df.floats(1).?, again.floats(1).?);
     try testing.expectEqualStrings(df.strings(2).?.data, again.strings(2).?.data);
     try testing.expectEqualSlices(usize, df.strings(2).?.offsets, again.strings(2).?.offsets);
+}
+
+test "writes with another delimiter, quoting only what now needs it" {
+    var df = try DataFrame.parse(testing.allocator, "name,note\nada,\"a,b\"\ngrace,x;y\n", .{});
+    defer df.deinit();
+    const out = try toOwnedSlice(testing.allocator, df, .{ .delimiter = ';' });
+    defer testing.allocator.free(out);
+    try testing.expectEqualStrings("name;note\nada;a,b\ngrace;\"x;y\"\n", out);
+
+    var again = try DataFrame.parse(testing.allocator, out, .{ .delimiter = ';' });
+    defer again.deinit();
+    try testing.expectEqualStrings("a,b", again.strings(1).?.get(0));
+    try testing.expectEqualStrings("x;y", again.strings(1).?.get(1));
+}
+
+test "refuses a delimiter the format reserves" {
+    var df = try DataFrame.parse(testing.allocator, "a\n1\n", .{});
+    defer df.deinit();
+    try testing.expectError(error.InvalidDelimiter, toOwnedSlice(testing.allocator, df, .{ .delimiter = '"' }));
 }

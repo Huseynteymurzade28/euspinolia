@@ -70,6 +70,7 @@ pub const Status = enum(i32) {
     type_mismatch = 16,
     invalid_operator = 17,
     invalid_aggregate = 18,
+    invalid_delimiter = 19,
     unknown = 99,
 
     fn message(self: Status) [:0]const u8 {
@@ -93,6 +94,7 @@ pub const Status = enum(i32) {
             .type_mismatch => "cannot compare text with a number",
             .invalid_operator => "unknown comparison operator",
             .invalid_aggregate => "unknown aggregate function",
+            .invalid_delimiter => "the delimiter cannot be a quote or a line break",
             .unknown => "unknown error",
         };
     }
@@ -109,6 +111,7 @@ fn statusFor(err: anyerror) Status {
         error.UnexpectedCharacterAfterQuote => .unexpected_character_after_quote,
         error.InconsistentFieldCount => .inconsistent_field_count,
         error.MissingHeader => .missing_header,
+        error.InvalidDelimiter => .invalid_delimiter,
         error.InvalidNumber => .invalid_number,
         error.NotNumeric => .not_numeric,
         error.EmptyColumn => .empty_column,
@@ -126,11 +129,13 @@ export fn eus_status_message(code: i32) [*:0]const u8 {
     return status.message().ptr;
 }
 
-/// Reads and parses a CSV file. On success `out_frame` receives a frame the
-/// caller must release with `eus_frame_free`; on failure it is left untouched.
+/// Reads and parses a CSV file whose fields are separated by `delimiter`. On
+/// success `out_frame` receives a frame the caller must release with
+/// `eus_frame_free`; on failure it is left untouched.
 export fn eus_read_csv(
     path_ptr: [*]const u8,
     path_len: usize,
+    delimiter: u8,
     out_frame: *?*DataFrame,
 ) i32 {
     const gpa = allocator();
@@ -146,6 +151,7 @@ export fn eus_read_csv(
         std.Io.Dir.cwd(),
         path_ptr[0..path_len],
         .unlimited,
+        .{ .delimiter = delimiter },
     ) catch |err| return @intFromEnum(statusFor(err));
 
     return publish(gpa, parsed, out_frame);
@@ -156,10 +162,11 @@ export fn eus_read_csv(
 export fn eus_parse_csv(
     text_ptr: [*]const u8,
     text_len: usize,
+    delimiter: u8,
     out_frame: *?*DataFrame,
 ) i32 {
     const gpa = allocator();
-    const parsed = DataFrame.parse(gpa, text_ptr[0..text_len]) catch |err|
+    const parsed = DataFrame.parse(gpa, text_ptr[0..text_len], .{ .delimiter = delimiter }) catch |err|
         return @intFromEnum(statusFor(err));
 
     return publish(gpa, parsed, out_frame);
@@ -405,15 +412,17 @@ export fn eus_frame_groupby(
     return publish(gpa, grouped, out_frame);
 }
 
-/// Serialises a frame to CSV text. On success `out_ptr` / `out_len` describe
-/// a buffer the caller must release with `eus_bytes_free`; on failure they
-/// are left untouched. The text is not null-terminated.
+/// Serialises a frame to CSV text separated by `delimiter`. On success
+/// `out_ptr` / `out_len` describe a buffer the caller must release with
+/// `eus_bytes_free`; on failure they are left untouched. The text is not
+/// null-terminated.
 export fn eus_frame_to_csv(
     handle: *const DataFrame,
+    delimiter: u8,
     out_ptr: *?[*]u8,
     out_len: *usize,
 ) i32 {
-    const text = write.toOwnedSlice(allocator(), handle.*) catch |err|
+    const text = write.toOwnedSlice(allocator(), handle.*, .{ .delimiter = delimiter }) catch |err|
         return @intFromEnum(statusFor(err));
     out_ptr.* = text.ptr;
     out_len.* = text.len;
@@ -431,7 +440,7 @@ const testing = std.testing;
 /// Mirrors what the Python layer does: parse, then read back through the ABI.
 fn parseForTest(text: []const u8) !*DataFrame {
     var handle: ?*DataFrame = null;
-    const code = eus_parse_csv(text.ptr, text.len, &handle);
+    const code = eus_parse_csv(text.ptr, text.len, ',', &handle);
     try testing.expectEqual(@as(i32, 0), code);
     return handle.?;
 }
@@ -510,11 +519,14 @@ test "string columns cross as offsets plus a data buffer" {
 test "parse failures come back as status codes" {
     var handle: ?*DataFrame = null;
 
-    const missing_header = eus_parse_csv("", 0, &handle);
+    const missing_header = eus_parse_csv("", 0, ',', &handle);
     try testing.expectEqual(@intFromEnum(Status.missing_header), missing_header);
 
     const bad = "a,b\n1,2,3\n";
-    const ragged = eus_parse_csv(bad.ptr, bad.len, &handle);
+    const ragged = eus_parse_csv(bad.ptr, bad.len, ',', &handle);
+
+    const quote = eus_parse_csv(bad.ptr, bad.len, '"', &handle);
+    try testing.expectEqual(@intFromEnum(Status.invalid_delimiter), quote);
     try testing.expectEqual(@intFromEnum(Status.inconsistent_field_count), ragged);
 
     // The out-parameter must be left alone on failure.
@@ -524,7 +536,7 @@ test "parse failures come back as status codes" {
 test "a missing file reports file_not_found" {
     var handle: ?*DataFrame = null;
     const path = "definitely-not-here.csv";
-    const code = eus_read_csv(path.ptr, path.len, &handle);
+    const code = eus_read_csv(path.ptr, path.len, ',', &handle);
 
     try testing.expectEqual(@intFromEnum(Status.file_not_found), code);
     try testing.expect(handle == null);
@@ -711,10 +723,29 @@ test "a frame crosses back out as CSV text" {
 
     var ptr: ?[*]u8 = null;
     var len: usize = 0;
-    try testing.expectEqual(@as(i32, 0), eus_frame_to_csv(df, &ptr, &len));
+    try testing.expectEqual(@as(i32, 0), eus_frame_to_csv(df, ',', &ptr, &len));
     defer eus_bytes_free(ptr, len);
 
     try testing.expectEqualStrings("id,name\n1,\"a,b\"\n2,grace\n", ptr.?[0..len]);
+}
+
+test "the delimiter crosses the boundary both ways" {
+    var handle: ?*DataFrame = null;
+    const text = "id\tname\n1\ta,b\n";
+    try testing.expectEqual(@as(i32, 0), eus_parse_csv(text.ptr, text.len, '\t', &handle));
+    defer eus_frame_free(handle);
+    try testing.expectEqual(@as(usize, 2), eus_frame_columns(handle.?));
+
+    var ptr: ?[*]u8 = null;
+    var len: usize = 0;
+    try testing.expectEqual(@as(i32, 0), eus_frame_to_csv(handle.?, ';', &ptr, &len));
+    defer eus_bytes_free(ptr, len);
+    try testing.expectEqualStrings("id;name\n1;a,b\n", ptr.?[0..len]);
+
+    try testing.expectEqual(
+        @intFromEnum(Status.invalid_delimiter),
+        eus_frame_to_csv(handle.?, '\n', &ptr, &len),
+    );
 }
 
 test "freeing null bytes is a no-op" {

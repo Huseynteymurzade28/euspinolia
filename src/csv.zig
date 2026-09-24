@@ -4,10 +4,25 @@ const dtype = @import("dtype.zig");
 const Allocator = std.mem.Allocator;
 
 pub const ParseError = error{
+    /// The delimiter is a quote or a line break, which the format reserves.
+    InvalidDelimiter,
     UnterminatedQuote,
     UnexpectedCharacterAfterQuote,
     InconsistentFieldCount,
     MissingHeader,
+};
+
+pub const Options = struct {
+    /// Any single byte but `"`, `\r` and `\n`. Multi-byte UTF-8 characters
+    /// cannot be delimiters; `\t` gives TSV.
+    delimiter: u8 = ',',
+
+    pub fn validate(self: Options) ParseError!void {
+        switch (self.delimiter) {
+            '"', '\r', '\n' => return ParseError.InvalidDelimiter,
+            else => {},
+        }
+    }
 };
 
 pub const Field = struct {
@@ -26,8 +41,8 @@ pub const Scanner = struct {
     delimiter: u8 = ',',
     at_record_start: bool = true,
 
-    pub fn init(input: []const u8) Scanner {
-        return .{ .input = input };
+    pub fn init(input: []const u8, delimiter: u8) Scanner {
+        return .{ .input = input, .delimiter = delimiter };
     }
 
     /// Returns the next field, or null once the input is exhausted.
@@ -146,12 +161,13 @@ pub const Table = struct {
 
     /// Parses an in-memory buffer. The table copies what it needs, so the
     /// caller may free `input` immediately.
-    pub fn parse(gpa: Allocator, input: []const u8) !Table {
+    pub fn parse(gpa: Allocator, input: []const u8, options: Options) !Table {
+        try options.validate();
         var table = empty(gpa);
         errdefer table.arena.deinit();
 
         const owned = try table.arena.allocator().dupe(u8, input);
-        try table.fill(owned);
+        try table.fill(owned, options);
         return table;
     }
 
@@ -165,13 +181,15 @@ pub const Table = struct {
         dir: std.Io.Dir,
         path: []const u8,
         limit: std.Io.Limit,
+        options: Options,
     ) !Table {
+        try options.validate();
         var table = empty(gpa);
         errdefer table.arena.deinit();
 
         // Read straight into the table's arena to avoid a second full copy.
         const bytes = try dir.readFileAlloc(io, path, table.arena.allocator(), limit);
-        try table.fill(bytes);
+        try table.fill(bytes, options);
         return table;
     }
 
@@ -223,9 +241,9 @@ pub const Table = struct {
     }
 
     /// `owned` must already live in this table's arena.
-    fn fill(self: *Table, owned: []const u8) !void {
+    fn fill(self: *Table, owned: []const u8, options: Options) !void {
         const arena = self.arena.allocator();
-        var scanner = Scanner.init(owned);
+        var scanner = Scanner.init(owned, options.delimiter);
 
         var record: std.ArrayList([]const u8) = .empty;
         if (!try readRecord(&scanner, arena, &record)) return ParseError.MissingHeader;
@@ -259,7 +277,7 @@ fn expectRow(table: Table, row: usize, expected: []const []const u8) !void {
 }
 
 test "parses a minimal table" {
-    var table = try Table.parse(testing.allocator, "a,b,c\n1,2,3\n4,5,6\n");
+    var table = try Table.parse(testing.allocator, "a,b,c\n1,2,3\n4,5,6\n", .{});
     defer table.deinit();
 
     try testing.expectEqual(@as(usize, 3), table.columnCount());
@@ -269,7 +287,7 @@ test "parses a minimal table" {
 }
 
 test "does not require a trailing newline" {
-    var table = try Table.parse(testing.allocator, "a,b\n1,2");
+    var table = try Table.parse(testing.allocator, "a,b\n1,2", .{});
     defer table.deinit();
 
     try testing.expectEqual(@as(usize, 1), table.rowCount());
@@ -277,14 +295,14 @@ test "does not require a trailing newline" {
 }
 
 test "handles empty fields including a trailing one" {
-    var table = try Table.parse(testing.allocator, "a,b,c\n,2,\n");
+    var table = try Table.parse(testing.allocator, "a,b,c\n,2,\n", .{});
     defer table.deinit();
 
     try expectRow(table, 0, &.{ "", "2", "" });
 }
 
 test "handles CRLF line endings" {
-    var table = try Table.parse(testing.allocator, "a,b\r\n1,2\r\n");
+    var table = try Table.parse(testing.allocator, "a,b\r\n1,2\r\n", .{});
     defer table.deinit();
 
     try testing.expectEqual(@as(usize, 1), table.rowCount());
@@ -292,7 +310,7 @@ test "handles CRLF line endings" {
 }
 
 test "skips blank lines" {
-    var table = try Table.parse(testing.allocator, "a,b\n\n1,2\n\n\n3,4\n\n");
+    var table = try Table.parse(testing.allocator, "a,b\n\n1,2\n\n\n3,4\n\n", .{});
     defer table.deinit();
 
     try testing.expectEqual(@as(usize, 2), table.rowCount());
@@ -307,7 +325,7 @@ test "quoted fields carry delimiters, newlines and escaped quotes" {
         \\lines"
         \\
     ;
-    var table = try Table.parse(testing.allocator, input);
+    var table = try Table.parse(testing.allocator, input, .{});
     defer table.deinit();
 
     try testing.expectEqual(@as(usize, 2), table.rowCount());
@@ -316,33 +334,33 @@ test "quoted fields carry delimiters, newlines and escaped quotes" {
 }
 
 test "empty quoted field stays empty" {
-    var table = try Table.parse(testing.allocator, "a,b\n\"\",x\n");
+    var table = try Table.parse(testing.allocator, "a,b\n\"\",x\n", .{});
     defer table.deinit();
 
     try expectRow(table, 0, &.{ "", "x" });
 }
 
 test "rejects an unterminated quote" {
-    try testing.expectError(ParseError.UnterminatedQuote, Table.parse(testing.allocator, "a\n\"oops\n"));
+    try testing.expectError(ParseError.UnterminatedQuote, Table.parse(testing.allocator, "a\n\"oops\n", .{}));
 }
 
 test "rejects stray characters after a closing quote" {
     try testing.expectError(
         ParseError.UnexpectedCharacterAfterQuote,
-        Table.parse(testing.allocator, "a,b\n\"x\"y,2\n"),
+        Table.parse(testing.allocator, "a,b\n\"x\"y,2\n", .{}),
     );
 }
 
 test "rejects rows that disagree with the header" {
-    try testing.expectError(ParseError.InconsistentFieldCount, Table.parse(testing.allocator, "a,b\n1,2,3\n"));
+    try testing.expectError(ParseError.InconsistentFieldCount, Table.parse(testing.allocator, "a,b\n1,2,3\n", .{}));
 }
 
 test "rejects input without a header" {
-    try testing.expectError(ParseError.MissingHeader, Table.parse(testing.allocator, ""));
+    try testing.expectError(ParseError.MissingHeader, Table.parse(testing.allocator, "", .{}));
 }
 
 test "header-only input yields zero rows" {
-    var table = try Table.parse(testing.allocator, "a,b\n");
+    var table = try Table.parse(testing.allocator, "a,b\n", .{});
     defer table.deinit();
 
     try testing.expectEqual(@as(usize, 2), table.columnCount());
@@ -350,7 +368,7 @@ test "header-only input yields zero rows" {
 }
 
 test "columnIndex finds columns by name" {
-    var table = try Table.parse(testing.allocator, "id,name\n1,ada\n");
+    var table = try Table.parse(testing.allocator, "id,name\n1,ada\n", .{});
     defer table.deinit();
 
     try testing.expectEqual(@as(?usize, 0), table.columnIndex("id"));
@@ -365,7 +383,7 @@ test "infers a type per column" {
         \\2,1.25,grace,x
         \\
     ;
-    var table = try Table.parse(testing.allocator, input);
+    var table = try Table.parse(testing.allocator, input, .{});
     defer table.deinit();
 
     const types = try table.inferTypes(testing.allocator);
@@ -375,7 +393,7 @@ test "infers a type per column" {
 }
 
 test "an integer column with one float widens to float" {
-    var table = try Table.parse(testing.allocator, "n\n1\n2\n3.5\n");
+    var table = try Table.parse(testing.allocator, "n\n1\n2\n3.5\n", .{});
     defer table.deinit();
 
     const types = try table.inferTypes(testing.allocator);
@@ -390,7 +408,7 @@ test "parses from a file on disk" {
 
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "people.csv", .data = "id,name\n1,ada\n2,grace\n" });
 
-    var table = try Table.parseFile(testing.allocator, testing.io, tmp.dir, "people.csv", .unlimited);
+    var table = try Table.parseFile(testing.allocator, testing.io, tmp.dir, "people.csv", .unlimited, .{});
     defer table.deinit();
 
     try testing.expectEqual(@as(usize, 2), table.rowCount());
@@ -410,7 +428,7 @@ test "parses a medium file" {
         try text.appendSlice(gpa, try std.fmt.bufPrint(&buf, "{d},user{d},{d}.5\n", .{ i, i, i }));
     }
 
-    var table = try Table.parse(gpa, text.items);
+    var table = try Table.parse(gpa, text.items, .{});
     defer table.deinit();
 
     try testing.expectEqual(@as(usize, row_count), table.rowCount());
@@ -419,4 +437,28 @@ test "parses a medium file" {
     const types = try table.inferTypes(gpa);
     defer gpa.free(types);
     try testing.expectEqualSlices(dtype.ColumnType, &.{ .int, .string, .float }, types);
+}
+
+test "parses with another delimiter" {
+    var table = try Table.parse(testing.allocator, "a;b\n1,5;\"x;y\"\n", .{ .delimiter = ';' });
+    defer table.deinit();
+
+    try testing.expectEqual(@as(usize, 2), table.columnCount());
+    try expectRow(table, 0, &.{ "1,5", "x;y" });
+}
+
+test "parses tab-separated values" {
+    var table = try Table.parse(testing.allocator, "a\tb\r\nx y\t\r\n", .{ .delimiter = '\t' });
+    defer table.deinit();
+
+    try expectRow(table, 0, &.{ "x y", "" });
+}
+
+test "rejects delimiters the format reserves" {
+    for ("\"\r\n") |delimiter| {
+        try testing.expectError(
+            ParseError.InvalidDelimiter,
+            Table.parse(testing.allocator, "a\n1\n", .{ .delimiter = delimiter }),
+        );
+    }
 }

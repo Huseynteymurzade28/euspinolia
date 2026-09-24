@@ -104,8 +104,8 @@ pub const DataFrame = struct {
 
     /// Parses an in-memory buffer straight into columnar form. The row-major
     /// table is a staging step and is released before returning.
-    pub fn parse(gpa: Allocator, input: []const u8) !DataFrame {
-        var table = try csv.Table.parse(gpa, input);
+    pub fn parse(gpa: Allocator, input: []const u8, options: csv.Options) !DataFrame {
+        var table = try csv.Table.parse(gpa, input, options);
         defer table.deinit();
         return fromTable(gpa, table);
     }
@@ -119,8 +119,9 @@ pub const DataFrame = struct {
         dir: std.Io.Dir,
         path: []const u8,
         limit: std.Io.Limit,
+        options: csv.Options,
     ) !DataFrame {
-        var table = try csv.Table.parseFile(gpa, io, dir, path, limit);
+        var table = try csv.Table.parseFile(gpa, io, dir, path, limit, options);
         defer table.deinit();
         return fromTable(gpa, table);
     }
@@ -310,7 +311,7 @@ fn gatherStrings(
 const testing = std.testing;
 
 test "builds one typed column per header" {
-    var frame = try DataFrame.parse(testing.allocator, "id,ratio,name\n1,0.5,ada\n2,1.25,grace\n");
+    var frame = try DataFrame.parse(testing.allocator, "id,ratio,name\n1,0.5,ada\n2,1.25,grace\n", .{});
     defer frame.deinit();
 
     try testing.expectEqual(@as(usize, 3), frame.columnCount());
@@ -329,7 +330,7 @@ test "builds one typed column per header" {
 }
 
 test "column names survive the conversion" {
-    var frame = try DataFrame.parse(testing.allocator, "id,name\n1,ada\n");
+    var frame = try DataFrame.parse(testing.allocator, "id,name\n1,ada\n", .{});
     defer frame.deinit();
 
     try testing.expectEqualStrings("id", frame.names[0]);
@@ -340,7 +341,7 @@ test "column names survive the conversion" {
 }
 
 test "typed accessors reject the wrong type" {
-    var frame = try DataFrame.parse(testing.allocator, "n,s\n1,ada\n");
+    var frame = try DataFrame.parse(testing.allocator, "n,s\n1,ada\n", .{});
     defer frame.deinit();
 
     try testing.expect(frame.floats(0) == null);
@@ -349,7 +350,7 @@ test "typed accessors reject the wrong type" {
 }
 
 test "an int column with one float becomes a float column" {
-    var frame = try DataFrame.parse(testing.allocator, "n\n1\n2\n3.5\n");
+    var frame = try DataFrame.parse(testing.allocator, "n\n1\n2\n3.5\n", .{});
     defer frame.deinit();
 
     try testing.expectEqualSlices(f64, &.{ 1, 2, 3.5 }, frame.floats(0).?);
@@ -358,7 +359,7 @@ test "an int column with one float becomes a float column" {
 test "string offsets are contiguous and cover the data buffer" {
     // The second column keeps the middle record from looking like a blank
     // line, which the parser would skip.
-    var frame = try DataFrame.parse(testing.allocator, "s,n\nada,1\n,2\nlovelace,3\n");
+    var frame = try DataFrame.parse(testing.allocator, "s,n\nada,1\n,2\nlovelace,3\n", .{});
     defer frame.deinit();
 
     const column = frame.strings(0).?;
@@ -369,7 +370,7 @@ test "string offsets are contiguous and cover the data buffer" {
 }
 
 test "a header-only file yields empty columns" {
-    var frame = try DataFrame.parse(testing.allocator, "a,b\n");
+    var frame = try DataFrame.parse(testing.allocator, "a,b\n", .{});
     defer frame.deinit();
 
     try testing.expectEqual(@as(usize, 2), frame.columnCount());
@@ -380,7 +381,7 @@ test "a header-only file yields empty columns" {
 }
 
 test "the frame outlives the table it came from" {
-    var table = try csv.Table.parse(testing.allocator, "id,name\n7,ada\n");
+    var table = try csv.Table.parse(testing.allocator, "id,name\n7,ada\n", .{});
     var frame = try DataFrame.fromTable(testing.allocator, table);
     defer frame.deinit();
     table.deinit();
@@ -391,7 +392,7 @@ test "the frame outlives the table it came from" {
 }
 
 test "caller-chosen types override inference" {
-    var table = try csv.Table.parse(testing.allocator, "n\n1\n2\n");
+    var table = try csv.Table.parse(testing.allocator, "n\n1\n2\n", .{});
     defer table.deinit();
 
     var as_float = try DataFrame.fromTableWithTypes(testing.allocator, table, &.{.float});
@@ -404,7 +405,7 @@ test "caller-chosen types override inference" {
 }
 
 test "a type the data cannot hold is an error" {
-    var table = try csv.Table.parse(testing.allocator, "s\nada\n");
+    var table = try csv.Table.parse(testing.allocator, "s\nada\n", .{});
     defer table.deinit();
 
     try testing.expectError(
@@ -422,7 +423,7 @@ test "parses a file into columns" {
         .data = "id,name\n1,ada\n2,grace\n",
     });
 
-    var frame = try DataFrame.parseFile(testing.allocator, testing.io, tmp.dir, "people.csv", .unlimited);
+    var frame = try DataFrame.parseFile(testing.allocator, testing.io, tmp.dir, "people.csv", .unlimited, .{});
     defer frame.deinit();
 
     try testing.expectEqualSlices(i64, &.{ 1, 2 }, frame.ints(0).?);
@@ -442,7 +443,7 @@ test "converts a medium file" {
         try text.appendSlice(gpa, try std.fmt.bufPrint(&buf, "{d},user{d},{d}.5\n", .{ i, i, i }));
     }
 
-    var frame = try DataFrame.parse(gpa, text.items);
+    var frame = try DataFrame.parse(gpa, text.items, .{});
     defer frame.deinit();
 
     try testing.expectEqual(@as(usize, row_count), frame.rowCount());
@@ -452,7 +453,7 @@ test "converts a medium file" {
 }
 
 test "take keeps the masked rows in order, across every column type" {
-    var df = try DataFrame.parse(testing.allocator, "n,x,s\n1,0.5,ada\n2,1.5,grace\n3,2.5,\n4,3.5,mary\n");
+    var df = try DataFrame.parse(testing.allocator, "n,x,s\n1,0.5,ada\n2,1.5,grace\n3,2.5,\n4,3.5,mary\n", .{});
     defer df.deinit();
 
     var kept = try df.take(testing.allocator, &.{ true, false, true, true });
@@ -472,7 +473,7 @@ test "take keeps the masked rows in order, across every column type" {
 }
 
 test "take drops a trailing string longer than everything kept" {
-    var df = try DataFrame.parse(testing.allocator, "s\nab\nmuch longer\n");
+    var df = try DataFrame.parse(testing.allocator, "s\nab\nmuch longer\n", .{});
     defer df.deinit();
 
     var kept = try df.take(testing.allocator, &.{ true, false });
@@ -484,7 +485,7 @@ test "take drops a trailing string longer than everything kept" {
 }
 
 test "take with nothing kept preserves the column types" {
-    var df = try DataFrame.parse(testing.allocator, "n,s\n1,ada\n");
+    var df = try DataFrame.parse(testing.allocator, "n,s\n1,ada\n", .{});
     defer df.deinit();
 
     var empty = try df.take(testing.allocator, &.{false});
@@ -498,7 +499,7 @@ test "take with nothing kept preserves the column types" {
 }
 
 test "the taken frame outlives its source" {
-    var df = try DataFrame.parse(testing.allocator, "n,s\n1,ada\n2,grace\n");
+    var df = try DataFrame.parse(testing.allocator, "n,s\n1,ada\n2,grace\n", .{});
     var kept = try df.take(testing.allocator, &.{ false, true });
     defer kept.deinit();
     df.deinit();

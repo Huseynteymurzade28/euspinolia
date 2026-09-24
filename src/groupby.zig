@@ -290,7 +290,7 @@ const sample =
 ;
 
 test "assign gives dense ids in order of first appearance" {
-    var df = try DataFrame.parse(testing.allocator, sample);
+    var df = try DataFrame.parse(testing.allocator, sample, .{});
     defer df.deinit();
 
     const groups = try assign(testing.allocator, df.column(0));
@@ -302,7 +302,7 @@ test "assign gives dense ids in order of first appearance" {
 }
 
 test "assign works on every key type" {
-    var df = try DataFrame.parse(testing.allocator, "n,x\n1,0.5\n2,0.5\n1,1.5\n");
+    var df = try DataFrame.parse(testing.allocator, "n,x\n1,0.5\n2,0.5\n1,1.5\n", .{});
     defer df.deinit();
 
     const by_int = try assign(testing.allocator, df.column(0));
@@ -322,7 +322,7 @@ test "negative zero groups with zero" {
 }
 
 test "empty strings are a key like any other" {
-    var df = try DataFrame.parse(testing.allocator, "s,n\n,1\na,2\n,3\n");
+    var df = try DataFrame.parse(testing.allocator, "s,n\n,1\na,2\n,3\n", .{});
     defer df.deinit();
 
     const groups = try assign(testing.allocator, df.column(0));
@@ -331,7 +331,7 @@ test "empty strings are a key like any other" {
 }
 
 test "groupBy with every reduction" {
-    var df = try DataFrame.parse(testing.allocator, sample);
+    var df = try DataFrame.parse(testing.allocator, sample, .{});
     defer df.deinit();
 
     var out = try groupBy(testing.allocator, df, 0, &.{
@@ -364,7 +364,7 @@ test "groupBy with every reduction" {
 }
 
 test "sum, min and max keep the column's type" {
-    var df = try DataFrame.parse(testing.allocator, sample);
+    var df = try DataFrame.parse(testing.allocator, sample, .{});
     defer df.deinit();
 
     var out = try groupBy(testing.allocator, df, 0, &.{
@@ -380,7 +380,7 @@ test "sum, min and max keep the column's type" {
 }
 
 test "a numeric key stays numeric in the result" {
-    var df = try DataFrame.parse(testing.allocator, "n,x\n2,0.5\n1,1.5\n2,2.5\n");
+    var df = try DataFrame.parse(testing.allocator, "n,x\n2,0.5\n1,1.5\n2,2.5\n", .{});
     defer df.deinit();
 
     var out = try groupBy(testing.allocator, df, 0, &.{.{ .column = 1, .func = .sum }});
@@ -391,7 +391,7 @@ test "a numeric key stays numeric in the result" {
 }
 
 test "just the key column, with no specs, is the distinct keys" {
-    var df = try DataFrame.parse(testing.allocator, sample);
+    var df = try DataFrame.parse(testing.allocator, sample, .{});
     defer df.deinit();
 
     var out = try groupBy(testing.allocator, df, 0, &.{});
@@ -402,7 +402,7 @@ test "just the key column, with no specs, is the distinct keys" {
 }
 
 test "count ignores the column it is given" {
-    var df = try DataFrame.parse(testing.allocator, sample);
+    var df = try DataFrame.parse(testing.allocator, sample, .{});
     defer df.deinit();
 
     var out = try groupBy(testing.allocator, df, 0, &.{.{ .column = 0, .func = .count }});
@@ -412,7 +412,7 @@ test "count ignores the column it is given" {
 }
 
 test "an empty frame groups into an empty frame" {
-    var df = try DataFrame.parse(testing.allocator, "s,n\n");
+    var df = try DataFrame.parse(testing.allocator, "s,n\n", .{});
     defer df.deinit();
 
     var out = try groupBy(testing.allocator, df, 0, &.{.{ .column = 1, .func = .count }});
@@ -424,7 +424,7 @@ test "an empty frame groups into an empty frame" {
 }
 
 test "the result outlives its source" {
-    var df = try DataFrame.parse(testing.allocator, sample);
+    var df = try DataFrame.parse(testing.allocator, sample, .{});
     var out = try groupBy(testing.allocator, df, 0, &.{.{ .column = 1, .func = .sum }});
     defer out.deinit();
     df.deinit();
@@ -434,7 +434,7 @@ test "the result outlives its source" {
 }
 
 test "arithmetic on a string column is an error" {
-    var df = try DataFrame.parse(testing.allocator, sample);
+    var df = try DataFrame.parse(testing.allocator, sample, .{});
     defer df.deinit();
 
     for ([_]Func{ .sum, .mean, .min, .max }) |func| {
@@ -469,7 +469,7 @@ test "groups a large frame" {
         try text.appendSlice(gpa, try std.fmt.bufPrint(&buf, "{d},{d}\n", .{ i % 7, i }));
     }
 
-    var df = try DataFrame.parse(gpa, text.items);
+    var df = try DataFrame.parse(gpa, text.items, .{});
     defer df.deinit();
 
     var out = try groupBy(gpa, df, 0, &.{

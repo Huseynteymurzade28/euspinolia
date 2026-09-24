@@ -58,6 +58,7 @@ class Status(enum.IntEnum):
     TYPE_MISMATCH = 16
     INVALID_OPERATOR = 17
     INVALID_AGGREGATE = 18
+    INVALID_DELIMITER = 19
     UNKNOWN = 99
 
 
@@ -77,6 +78,7 @@ _STATUS_EXCEPTIONS: dict[int, type[Exception]] = {
     Status.TYPE_MISMATCH: TypeError,
     Status.INVALID_OPERATOR: ValueError,
     Status.INVALID_AGGREGATE: ValueError,
+    Status.INVALID_DELIMITER: ValueError,
 }
 
 
@@ -150,11 +152,15 @@ def _declare_signatures(lib: ctypes.CDLL) -> None:
 
     # Frames cross as opaque pointers; the result comes back through an
     # out-parameter so the return value can stay a status code.
-    lib.eus_read_csv.argtypes = [ctypes.c_char_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p)]
-    lib.eus_read_csv.restype = ctypes.c_int32
-
-    lib.eus_parse_csv.argtypes = [ctypes.c_char_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p)]
-    lib.eus_parse_csv.restype = ctypes.c_int32
+    for name in ("eus_read_csv", "eus_parse_csv"):
+        function = getattr(lib, name)
+        function.argtypes = [
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_uint8,
+            ctypes.POINTER(ctypes.c_void_p),
+        ]
+        function.restype = ctypes.c_int32
 
     lib.eus_frame_free.argtypes = [ctypes.c_void_p]
     lib.eus_frame_free.restype = None
@@ -256,6 +262,7 @@ def _declare_signatures(lib: ctypes.CDLL) -> None:
 
     lib.eus_frame_to_csv.argtypes = [
         ctypes.c_void_p,
+        ctypes.c_uint8,
         ctypes.POINTER(ctypes.c_void_p),
         ctypes.POINTER(ctypes.c_size_t),
     ]
