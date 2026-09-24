@@ -39,7 +39,7 @@ euspinolia = "euspinolia.__main__:main"
 [project.urls]
 Homepage = "https://github.com/Huseynteymurzade28/euspinolia"
 Documentation = "https://huseynteymurzade28.github.io/euspinolia/"
-Changelog = "https://github.com/Huseynteymurzade28/euspinolia/blob/main/CHANGELOG.md"
+Changelog = "https://huseynteymurzade28.github.io/euspinolia/changelog/"
 Issues = "https://github.com/Huseynteymurzade28/euspinolia/issues"
 
 [tool.hatch.version]

@@ -11,7 +11,7 @@
   <a href="https://github.com/Huseynteymurzade28/euspinolia/actions/workflows/ci.yml"><img src="https://github.com/Huseynteymurzade28/euspinolia/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://pypi.org/project/euspinolia/"><img src="https://img.shields.io/pypi/v/euspinolia?cacheSeconds=3600" alt="PyPI"></a>
   <a href="https://pypi.org/project/euspinolia/"><img src="https://img.shields.io/pypi/pyversions/euspinolia?cacheSeconds=3600" alt="Python"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
+  <a href="https://github.com/Huseynteymurzade28/euspinolia/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
 </p>
 
 A small, educational CSV/table library with its engine in Zig and a thin
@@ -86,7 +86,7 @@ score   float     0.0   100.0      49.973    10,001
 `euspinolia head data.csv -n 20` prints the first rows, and both take
 `--delimiter` (`';'`, `'\t'`). `python -m euspinolia` works too.
 
-To work from a checkout instead, see [docs/development.md](docs/development.md).
+To work from a checkout instead, see [docs/development.md](https://huseynteymurzade28.github.io/euspinolia/development/).
 
 ## What it does
 
@@ -138,7 +138,7 @@ Errors are ordinary Python exceptions: `FileNotFoundError`, `ParseError`,
 `TypeError` for text where a number was needed, `OverflowError` for a sum
 that leaves 64 bits.
 
-The full reference is in [docs/api.md](docs/api.md).
+The full reference is in [docs/api.md](https://huseynteymurzade28.github.io/euspinolia/api/).
 
 ## Performance
 
@@ -159,7 +159,7 @@ because numeric keys go through a radix sort. Reductions are a wash, as
 native code against native code should be; filtering is the one loss,
 because the result copies its strings rather than sharing them. What each
 number means, and how to run the benchmark yourself, is in
-[docs/benchmarks.md](docs/benchmarks.md).
+[docs/benchmarks.md](https://huseynteymurzade28.github.io/euspinolia/benchmarks/).
 
 ## How it works
 
@@ -183,7 +183,7 @@ Columns are struct-of-arrays: `int` and `float` are flat `[]i64` / `[]f64`,
 strings are one packed byte buffer plus offsets. A filter or an aggregate
 walks one contiguous array; a groupby hashes each key into a dense group id
 and folds into a flat accumulator; Python reads numeric columns in place.
-Module by module: [docs/internals.md](docs/internals.md).
+Module by module: [docs/internals.md](https://huseynteymurzade28.github.io/euspinolia/internals/).
 
 ## Scope
 
@@ -198,15 +198,15 @@ Python.
 
 ## Documentation
 
-Everything below is also published as a site:
-**[huseynteymurzade28.github.io/euspinolia](https://huseynteymurzade28.github.io/euspinolia/)**.
+The full documentation is a site,
+**[huseynteymurzade28.github.io/euspinolia](https://huseynteymurzade28.github.io/euspinolia/)**:
 
-- [API reference](docs/api.md) — every function, method, argument and exception
-- [Internals](docs/internals.md) — the Zig side, module by module, and the ABI
-- [Benchmarks](docs/benchmarks.md) — the numbers above, what they measure and why they come out that way
-- [Development](docs/development.md) — building, testing, cross-compiling wheels, releasing
-- [Changelog](CHANGELOG.md)
+- [API reference](https://huseynteymurzade28.github.io/euspinolia/api/) — every function, method, argument and exception
+- [Internals](https://huseynteymurzade28.github.io/euspinolia/internals/) — the Zig side, module by module, and the ABI
+- [Benchmarks](https://huseynteymurzade28.github.io/euspinolia/benchmarks/) — the numbers above, what they measure and why they come out that way
+- [Development](https://huseynteymurzade28.github.io/euspinolia/development/) — building, testing, cross-compiling wheels, releasing
+- [Changelog](https://huseynteymurzade28.github.io/euspinolia/changelog/)
 
 ## License
 
-[MIT](LICENSE).
+[MIT](https://github.com/Huseynteymurzade28/euspinolia/blob/main/LICENSE).
