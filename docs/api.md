@@ -348,6 +348,32 @@ exceptions:
 | `MemoryError` | the Zig side ran out of memory |
 | `LibraryNotFoundError` (subclass of `RuntimeError`) | the shared library could not be located at import time |
 
+## Command line
+
+Installing the package also installs an `euspinolia` command, for a look at
+a file without writing any Python. `python -m euspinolia` is the same thing.
+
+```console
+$ euspinolia stats people.csv
+people.csv: 3 rows x 4 columns, 89 B, parsed in 0 ms
+
+column  type      min   max    mean  distinct
+------  ------  -----  ----  ------  --------
+name    string                              3
+age     int        29    45  36.667         3
+score   float   73.25  91.5   84.25         3
+city    string                              3
+```
+
+| | |
+|---|---|
+| `euspinolia stats FILE` | rows, columns, size and parse time; then per column its type, `min`, `max` and `mean` if numeric, and the number of distinct values |
+| `euspinolia head FILE [-n N]` | the first `N` rows (default 10) as a table |
+| `-d`, `--delimiter` | for either command; `';'`, and `'\t'` or `tab` for TSV |
+| `--version` | the package version |
+
+Errors — a missing file, malformed CSV — go to stderr with exit status 1.
+
 ## Diagnostics
 
 | | |

@@ -60,14 +60,17 @@ src/dtype.zig           column type inference
 src/frame.zig           columnar DataFrame and the conversion into it
 src/agg.zig             reductions over a single column
 src/filter.zig          row selection by comparing a column against a value
+src/sort.zig            row order by one column: radix for numbers, block sort for text
 src/groupby.zig         hash the keys of one column, reduce others per group
 src/write.zig           serialise a frame back to CSV
 src/ffi.zig             the C ABI; every symbol is prefixed with `eus_`
 euspinolia/_ffi.py      library discovery, loading, ctypes signatures
-euspinolia/__init__.py  DataFrame, Column, Condition, GroupBy, read_csv
+euspinolia/__init__.py  DataFrame, Column, Condition, GroupBy, read_csv, from_dict
+euspinolia/__main__.py  the `euspinolia` command line: stats, head
 tests/test_ffi.py       bridge tests
-tests/test_frame.py     read_csv, indexing, reductions, filtering, groupby,
-                        to_csv, memory ownership
+tests/test_frame.py     read_csv, from_dict, indexing, selection, reductions,
+                        filtering, sorting, groupby, to_csv, memory ownership
+tests/test_cli.py       the command line
 bench/make_big.py       writes the 500,000-row CSV the benchmark reads
 bench/bench.py          euspinolia vs pandas vs the csv module, as a table
 hatch_build.py          build hook: compile with Zig, put the library in the wheel
