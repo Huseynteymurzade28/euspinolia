@@ -19,6 +19,7 @@ through it. Every file is under `src/`.
               │
               ├─▶ agg.zig      sum / mean / min / max      → one value
               ├─▶ filter.zig   mask a column, gather rows  → a new frame
+              ├─▶ sort.zig     order row indices, gather   → a new frame
               ├─▶ groupby.zig  hash keys, fold per group   → a new frame
               └─▶ write.zig    serialise                   → CSV bytes
               │
@@ -114,6 +115,32 @@ mask kept into a new frame.
 The Python `Condition` never builds a mask of its own: `df[a & b]` applies
 `a` and then `b` to the result, two Zig calls, no mask arithmetic.
 
+## `sort.zig` — radix for numbers, comparisons for text
+
+Sorting is two steps like filtering: `permutation` produces the row indices
+in sorted order, then `DataFrame.reorder` gathers every column in that
+order into a new frame. Only the key column is ever compared.
+
+Numeric keys never meet a comparison. Each value is mapped to a `u64` whose
+unsigned order is its numeric order — an `i64` has its sign bit flipped; a
+positive `f64` has its sign bit set and a negative one has every bit
+flipped, which is the IEEE 754 trick — and an LSD radix sort orders the
+`(key, row)` pairs one byte at a time, least significant first, through
+eight stable counting passes. One pre-pass builds all eight histograms, and
+a pass whose byte is the same for every key is skipped outright, so a
+salary column that fits in 18 bits costs three passes, not eight.
+Descending order is the same sort over `~key`, which keeps it stable.
+
+This replaced `std.mem.sort` over indices, which spent most of its time
+jumping to random rows to compare them: sorting a frame of 500,000 salaries
+alone went from 55 ms to 14 ms, and `sort_values` on the full five-column
+benchmark frame from 80 ms to 41 ms, most of the rest being the gather of
+the two text columns.
+
+Text still sorts with `std.mem.sort`, a stable block sort, comparing
+bytewise. Stability in both directions is what lets two sorts compose into
+a two-key order.
+
 ## `groupby.zig` — hash the keys, fold per group
 
 Two passes, and no per-group allocation:
@@ -134,8 +161,8 @@ after it.
 ## `write.zig` — serialisation
 
 Walks the typed columns and prints straight into an `std.Io.Writer`, one
-record per row. A field is quoted only when it holds a comma, a quote or a
-line break. Floats use the shortest round-trip decimal and are forced to
+record per row. A field is quoted only when it holds the delimiter, a quote
+or a line break. Floats use the shortest round-trip decimal and are forced to
 carry a `.` or an exponent, so the output infers back to the same column
 types; very large and very small magnitudes go scientific. `toOwnedSlice`
 collects the text into one buffer for the ABI.
@@ -145,8 +172,9 @@ collects the text into one buffer for the ABI.
 The whole surface Python calls, and it keeps three rules:
 
 - A frame crosses as an opaque pointer, created by `eus_read_csv`,
-  `eus_parse_csv`, `eus_frame_filter_*` or `eus_frame_groupby` and released
-  by `eus_frame_free`. Nothing else owns it.
+  `eus_parse_csv`, `eus_frame_filter_*`, `eus_frame_select`,
+  `eus_frame_sort` or `eus_frame_groupby` and released by
+  `eus_frame_free`. Nothing else owns it.
 - Zig error sets do not survive the C ABI, so fallible functions return an
   `i32` status and write their result through an out-parameter. The mapping
   from Zig errors to status codes happens once, in `statusFor`;

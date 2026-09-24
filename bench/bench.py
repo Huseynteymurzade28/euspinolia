@@ -104,6 +104,12 @@ def main():
             lambda: [r for r in rows if r[3] > SALARY_CUTOFF],
         ),
         (
+            "sort by salary",
+            lambda: df.sort_values("salary").close(),
+            (lambda: pdf.sort_values("salary", kind="stable")) if pd else None,
+            lambda: sorted(rows, key=lambda r: r[3]),
+        ),
+        (
             "groupby dept, mean score",
             lambda: df.groupby("dept").agg({"score": "mean"}).close(),
             (lambda: pdf.groupby("dept")["score"].mean()) if pd else None,

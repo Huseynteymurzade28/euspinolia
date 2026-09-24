@@ -141,6 +141,28 @@ df[df["city"] == "Paris"]
 `df["age"] > 30` computes nothing: it builds a `Condition` that `df[...]`
 applies in one Zig call. See [`Condition`](#condition).
 
+### `df.sort_values(by, *, ascending=True) -> DataFrame`
+
+The rows ordered by one column, named or by position, as a new frame that
+owns its memory.
+
+```python
+df.sort_values("age")                     # youngest first
+df.sort_values("score", ascending=False)  # highest first
+```
+
+- The sort is **stable** in both directions: rows with equal keys keep the
+  order they had. Sorting by a second key and then by the first therefore
+  gives a two-key order:
+
+  ```python
+  df.sort_values("age").sort_values("city")   # by city, then by age within a city
+  ```
+
+- Numbers sort numerically, `-0.0` and `0.0` as equals. Text sorts bytewise,
+  so `"B"` comes before `"a"`.
+- There is no index to keep: the result's rows are simply renumbered.
+
 ### `df.groupby(key) -> GroupBy`
 
 Buckets the rows by one column, named or by position. Nothing is computed
