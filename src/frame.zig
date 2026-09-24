@@ -164,6 +164,38 @@ pub const DataFrame = struct {
         return result;
     }
 
+    /// A new frame holding the columns at `indices`, in that order. Like
+    /// `take`, the result owns its own copies. Every index must be in range;
+    /// repeats are allowed here and left to the caller to refuse.
+    pub fn select(self: DataFrame, gpa: Allocator, indices: []const usize) !DataFrame {
+        var result: DataFrame = .{
+            .arena = .init(gpa),
+            .names = &.{},
+            .columns = &.{},
+            .row_count = self.row_count,
+        };
+        errdefer result.arena.deinit();
+        const arena = result.arena.allocator();
+
+        const names = try arena.alloc([]const u8, indices.len);
+        const columns = try arena.alloc(Column, indices.len);
+        for (names, columns, indices) |*name, *slot, index| {
+            name.* = try arena.dupe(u8, self.names[index]);
+            slot.* = switch (self.columns[index]) {
+                .int => |values| .{ .int = try arena.dupe(i64, values) },
+                .float => |values| .{ .float = try arena.dupe(f64, values) },
+                .string => |values| .{ .string = .{
+                    .offsets = try arena.dupe(usize, values.offsets),
+                    .data = try arena.dupe(u8, values.data),
+                } },
+            };
+        }
+        result.names = names;
+        result.columns = columns;
+
+        return result;
+    }
+
     pub fn deinit(self: *DataFrame) void {
         self.arena.deinit();
     }
@@ -507,4 +539,29 @@ test "the taken frame outlives its source" {
     try testing.expectEqualSlices(i64, &.{2}, kept.ints(0).?);
     try testing.expectEqualStrings("grace", kept.strings(1).?.get(0));
     try testing.expectEqualStrings("n", kept.names[0]);
+}
+
+test "select copies the chosen columns in the order asked" {
+    var df = try DataFrame.parse(testing.allocator, "n,x,s\n1,0.5,ada\n2,1.5,\n", .{});
+    var picked = try df.select(testing.allocator, &.{ 2, 0 });
+    defer picked.deinit();
+    df.deinit();
+
+    try testing.expectEqual(@as(usize, 2), picked.rowCount());
+    try testing.expectEqual(@as(usize, 2), picked.columnCount());
+    try testing.expectEqualStrings("s", picked.names[0]);
+    try testing.expectEqualStrings("n", picked.names[1]);
+    try testing.expectEqualStrings("ada", picked.strings(0).?.get(0));
+    try testing.expectEqualStrings("", picked.strings(0).?.get(1));
+    try testing.expectEqualSlices(i64, &.{ 1, 2 }, picked.ints(1).?);
+}
+
+test "select with no columns keeps the row count" {
+    var df = try DataFrame.parse(testing.allocator, "n\n1\n2\n", .{});
+    defer df.deinit();
+    var none = try df.select(testing.allocator, &.{});
+    defer none.deinit();
+
+    try testing.expectEqual(@as(usize, 0), none.columnCount());
+    try testing.expectEqual(@as(usize, 2), none.rowCount());
 }

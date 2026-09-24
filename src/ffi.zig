@@ -5,8 +5,8 @@
 //! - Every symbol is prefixed with `eus_`.
 //! - A `DataFrame` crosses the boundary as an opaque pointer. It is created by
 //!   `eus_read_csv` / `eus_parse_csv` / `eus_frame_filter_*` /
-//!   `eus_frame_groupby` and must be released with `eus_frame_free`; nothing
-//!   else owns it.
+//!   `eus_frame_select` / `eus_frame_groupby` and must be released with
+//!   `eus_frame_free`; nothing else owns it.
 //! - Functions that can fail return an `i32` status (`Status`) and write their
 //!   result through an out-parameter. Zig error sets do not survive the C ABI,
 //!   so every error is mapped to a status code once, here.
@@ -377,6 +377,26 @@ export fn eus_frame_filter_string(
     return filterInto(handle, index, op, .{ .string = value_ptr[0..value_len] }, out_frame);
 }
 
+/// Builds a new frame from `count` columns of `handle`, in the order given.
+/// The result is independent of `handle` and must be released with
+/// `eus_frame_free`; on failure `out_frame` is left untouched.
+export fn eus_frame_select(
+    handle: *const DataFrame,
+    indices: [*]const usize,
+    count: usize,
+    out_frame: *?*DataFrame,
+) i32 {
+    for (indices[0..count]) |index| {
+        if (index >= handle.columnCount()) return @intFromEnum(Status.column_out_of_range);
+    }
+
+    const gpa = allocator();
+    const picked = handle.select(gpa, indices[0..count]) catch |err|
+        return @intFromEnum(statusFor(err));
+
+    return publish(gpa, picked, out_frame);
+}
+
 /// Groups by column `key` and reduces `spec_count` columns per group, one
 /// output column per `(columns[i], funcs[i])` pair; `funcs` are `groupby.Func`
 /// tags. The result is a new frame — see `groupby.groupBy` for its shape —
@@ -642,6 +662,33 @@ test "filter failures come back as status codes" {
     try testing.expectEqual(
         @intFromEnum(Status.type_mismatch),
         eus_frame_filter_string(df, 0, eq, "1", 1, &handle),
+    );
+    try testing.expect(handle == null);
+}
+
+test "select crosses the boundary as a new, independent frame" {
+    const df = try parseForTest("a,b,c\n1,x,0.5\n");
+
+    var handle: ?*DataFrame = null;
+    const indices = [_]usize{ 2, 0 };
+    try testing.expectEqual(@as(i32, 0), eus_frame_select(df, &indices, indices.len, &handle));
+    const picked = handle.?;
+    defer eus_frame_free(picked);
+    eus_frame_free(df);
+
+    try testing.expectEqual(@as(usize, 2), eus_frame_columns(picked));
+    try testing.expectEqualSlices(f64, &.{0.5}, eus_frame_floats(picked, 0).?[0..1]);
+    try testing.expectEqualSlices(i64, &.{1}, eus_frame_ints(picked, 1).?[0..1]);
+}
+
+test "select refuses an out-of-range column" {
+    const df = try parseForTest("a\n1\n");
+    defer eus_frame_free(df);
+
+    var handle: ?*DataFrame = null;
+    try testing.expectEqual(
+        @intFromEnum(Status.column_out_of_range),
+        eus_frame_select(df, &[_]usize{ 0, 1 }, 2, &handle),
     );
     try testing.expect(handle == null);
 }

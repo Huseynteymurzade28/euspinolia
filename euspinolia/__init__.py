@@ -464,8 +464,9 @@ class DataFrame:
     def __contains__(self, name: object) -> bool:
         return name in self._columns
 
-    def __getitem__(self, key: str | int | Condition) -> Any:
-        """`df["name"]` / `df[0]` is a `Column`; `df[condition]` is a filtered `DataFrame`."""
+    def __getitem__(self, key: str | int | list[str | int] | Condition) -> Any:
+        """`df["name"]` / `df[0]` is a `Column`; `df[["a", "b"]]` and
+        `df[condition]` are new `DataFrame`s."""
         self._require_open()
         if isinstance(key, Condition):
             if key._frame is not self:
@@ -477,18 +478,46 @@ class DataFrame:
                     result.close()
                 result = narrowed
             return result
+        if isinstance(key, list):
+            return self.select(key)
+        return Column(self, self._column_index(key))
+
+    def select(self, columns: list[str | int]) -> DataFrame:
+        """The named columns, in the order given, as a new `DataFrame`.
+
+        Columns are copied in Zig, so the result owns its memory and outlives
+        this frame. `df.select(["name", "age"])` is `df[["name", "age"]]`.
+        """
+        indices = [self._column_index(column) for column in columns]
+        if len(set(indices)) != len(indices):
+            names = [self._columns[index] for index in indices]
+            repeated = sorted({name for name in names if names.count(name) > 1})
+            raise ValueError(f"columns selected more than once: {', '.join(map(repr, repeated))}")
+
+        handle = self._require_open()
+        count = len(indices)
+        out = ctypes.c_void_p()
+        check(
+            lib.eus_frame_select(
+                handle, (ctypes.c_size_t * count)(*indices), count, ctypes.byref(out)
+            )
+        )
+        return DataFrame(out.value)
+
+    def _column_index(self, key: str | int) -> int:
+        if isinstance(key, bool):
+            raise TypeError("a column is chosen by name or position, not by a bool")
         if isinstance(key, int):
             index = key + len(self._columns) if key < 0 else key
             if not 0 <= index < len(self._columns):
                 raise IndexError(f"column {key} out of range for {len(self._columns)} columns")
-        else:
-            try:
-                index = self._columns.index(key)
-            except ValueError:
-                raise KeyError(
-                    f"no column named {key!r}; have {', '.join(map(repr, self._columns))}"
-                ) from None
-        return Column(self, index)
+            return index
+        try:
+            return self._columns.index(key)
+        except ValueError:
+            raise KeyError(
+                f"no column named {key!r}; have {', '.join(map(repr, self._columns))}"
+            ) from None
 
     def row(self, index: int) -> tuple[Any, ...]:
         """One row as a tuple, in column order."""

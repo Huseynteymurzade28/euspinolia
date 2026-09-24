@@ -188,6 +188,59 @@ class TestColumnAccess(unittest.TestCase):
         self.assertEqual(df["city"].to_list(), ["İstanbul", "İzmir"])
 
 
+class TestSelect(unittest.TestCase):
+    def setUp(self):
+        self.df = euspinolia.parse_csv(SAMPLE)
+
+    def test_list_picks_columns_in_order(self):
+        picked = self.df[["score", "name"]]
+        self.assertIsInstance(picked, euspinolia.DataFrame)
+        self.assertEqual(picked.columns, ("score", "name"))
+        self.assertEqual(picked.shape, (3, 2))
+        self.assertEqual(picked.row(2), (73.25, "Doe, John"))
+
+    def test_select_is_the_same(self):
+        self.assertEqual(self.df.select(["age"]).head(), self.df[["age"]].head())
+
+    def test_positions_and_names_mix(self):
+        self.assertEqual(self.df[[-1, "name"]].columns, ("score", "name"))
+
+    def test_keeps_types(self):
+        self.assertEqual(self.df[["age", "score"]].dtypes, self.df.dtypes[1:])
+
+    def test_empty_list_keeps_the_rows(self):
+        self.assertEqual(self.df[[]].shape, (3, 0))
+
+    def test_result_outlives_the_source(self):
+        picked = self.df[["name"]]
+        self.df.close()
+        self.assertEqual(picked["name"].to_list(), ["ada", "grace", "Doe, John"])
+
+    def test_composes_with_filter(self):
+        adults = self.df[self.df["age"] > 30][["name"]]
+        self.assertEqual(adults["name"].to_list(), ["ada", "grace"])
+
+    def test_repeats_raise(self):
+        with self.assertRaises(ValueError) as caught:
+            self.df[["age", 1]]
+        self.assertIn("'age'", str(caught.exception))
+
+    def test_unknown_column_raises(self):
+        with self.assertRaises(KeyError):
+            self.df[["age", "missing"]]
+        with self.assertRaises(IndexError):
+            self.df[[9]]
+
+    def test_bool_is_not_a_position(self):
+        with self.assertRaises(TypeError):
+            self.df[[True]]
+
+    def test_needs_an_open_frame(self):
+        self.df.close()
+        with self.assertRaises(ValueError):
+            self.df.select(["age"])
+
+
 class TestAggregates(unittest.TestCase):
     def setUp(self):
         self.df = euspinolia.parse_csv(SAMPLE)
