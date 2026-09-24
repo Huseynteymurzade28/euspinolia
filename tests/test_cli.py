@@ -73,7 +73,9 @@ class TestCli(unittest.TestCase):
         code, out, err = run("stats", str(Path(self.tmp.name) / "missing.csv"))
         self.assertEqual(code, 1)
         self.assertEqual(out, "")
-        self.assertIn("no such file", err)
+        # Windows/ARM64 reads the file in Python, so the wording is Python's there.
+        self.assertIn("no such file", err.lower())
+        self.assertIn("missing.csv", err)
 
         self.path.write_text("a,b\n1,2,3\n", encoding="utf-8")
         code, _, err = run("head", str(self.path))
