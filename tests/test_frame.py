@@ -188,6 +188,86 @@ class TestColumnAccess(unittest.TestCase):
         self.assertEqual(df["city"].to_list(), ["İstanbul", "İzmir"])
 
 
+class TestFromDict(unittest.TestCase):
+    def test_builds_typed_columns(self):
+        df = euspinolia.from_dict({"name": ["ada", "grace"], "age": [36, 45], "score": [91.5, 88.0]})
+        self.assertEqual(df.columns, ("name", "age", "score"))
+        self.assertEqual(
+            df.dtypes,
+            (euspinolia.ColumnType.STRING, euspinolia.ColumnType.INT, euspinolia.ColumnType.FLOAT),
+        )
+        self.assertEqual(df.row(1), ("grace", 45, 88.0))
+
+    def test_round_trips_through_to_dict(self):
+        df = euspinolia.parse_csv(SAMPLE)
+        again = euspinolia.from_dict(df.to_dict())
+        self.assertEqual(again.to_dict(), df.to_dict())
+        self.assertEqual(again.dtypes, df.dtypes)
+
+    def test_to_dict(self):
+        self.assertEqual(
+            euspinolia.parse_csv("a,b\n1,x\n2,y\n").to_dict(), {"a": [1, 2], "b": ["x", "y"]}
+        )
+
+    def test_text_stays_text(self):
+        # Unlike parsing, a str that looks like a number is still a str.
+        df = euspinolia.from_dict({"zip": ["01234", "12"]})
+        self.assertEqual(df["zip"].to_list(), ["01234", "12"])
+
+    def test_ints_and_floats_make_a_float_column(self):
+        df = euspinolia.from_dict({"x": [1, 2.5]})
+        self.assertEqual(df["x"].dtype, euspinolia.ColumnType.FLOAT)
+        self.assertEqual(df["x"].to_list(), [1.0, 2.5])
+
+    def test_accepts_any_iterable(self):
+        df = euspinolia.from_dict({"n": range(3), "s": ("a", "b", "c")})
+        self.assertEqual(df["n"].to_list(), [0, 1, 2])
+
+    def test_empty_and_unicode_strings(self):
+        df = euspinolia.from_dict({"s": ["", "İstanbul", "a,\"b\"\n"]})
+        self.assertEqual(df["s"].to_list(), ["", "İstanbul", "a,\"b\"\n"])
+        self.assertEqual(euspinolia.parse_csv(df.to_csv())["s"].to_list(), df["s"].to_list())
+
+    def test_empty_inputs(self):
+        self.assertEqual(euspinolia.from_dict({}).shape, (0, 0))
+        empty = euspinolia.from_dict({"a": [], "b": []})
+        self.assertEqual(empty.shape, (0, 2))
+        self.assertEqual(empty.dtypes, (euspinolia.ColumnType.STRING,) * 2)
+
+    def test_extreme_integers_stay_exact(self):
+        values = [-(2**63), 2**63 - 1]
+        self.assertEqual(euspinolia.from_dict({"n": values})["n"].to_list(), values)
+
+    def test_works_with_the_rest_of_the_api(self):
+        df = euspinolia.from_dict({"city": ["a", "b", "a"], "n": [3, 1, 2]})
+        self.assertEqual(df.groupby("city").sum().to_dict(), {"city": ["a", "b"], "n": [5, 1]})
+        self.assertEqual(df.sort_values("n")["n"].to_list(), [1, 2, 3])
+
+    def test_refuses_what_it_cannot_store(self):
+        for column in ([1, None], [True, False], [1, "a"], [b"x"], [[1]]):
+            with self.assertRaises(TypeError, msg=column):
+                euspinolia.from_dict({"c": column})
+        with self.assertRaises(TypeError):
+            euspinolia.from_dict({"c": "abc"})
+        with self.assertRaises(TypeError):
+            euspinolia.from_dict({1: [1]})  # type: ignore[dict-item]
+
+    def test_refuses_non_finite_floats(self):
+        for value in (float("nan"), float("inf")):
+            with self.assertRaises(ValueError):
+                euspinolia.from_dict({"x": [1.0, value]})
+
+    def test_refuses_integers_beyond_64_bits(self):
+        for value in (2**63, -(2**63) - 1):
+            with self.assertRaises(OverflowError):
+                euspinolia.from_dict({"n": [0, value]})
+
+    def test_refuses_ragged_columns(self):
+        with self.assertRaises(ValueError) as caught:
+            euspinolia.from_dict({"a": [1, 2], "b": [1]})
+        self.assertIn("'b'", str(caught.exception))
+
+
 class TestSelect(unittest.TestCase):
     def setUp(self):
         self.df = euspinolia.parse_csv(SAMPLE)

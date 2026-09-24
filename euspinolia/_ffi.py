@@ -59,6 +59,7 @@ class Status(enum.IntEnum):
     INVALID_OPERATOR = 17
     INVALID_AGGREGATE = 18
     INVALID_DELIMITER = 19
+    INVALID_COLUMN_DATA = 20
     UNKNOWN = 99
 
 
@@ -79,6 +80,7 @@ _STATUS_EXCEPTIONS: dict[int, type[Exception]] = {
     Status.INVALID_OPERATOR: ValueError,
     Status.INVALID_AGGREGATE: ValueError,
     Status.INVALID_DELIMITER: ValueError,
+    Status.INVALID_COLUMN_DATA: ValueError,
 }
 
 
@@ -247,6 +249,21 @@ def _declare_signatures(lib: ctypes.CDLL) -> None:
         frame_out,
     ]
     lib.eus_frame_filter_string.restype = ctypes.c_int32
+
+    # Parallel arrays, one entry per column; see src/ffi.zig for which are
+    # read for which column type.
+    lib.eus_frame_from_columns.argtypes = [
+        ctypes.c_size_t,
+        ctypes.c_size_t,
+        ctypes.POINTER(ctypes.c_char_p),
+        ctypes.POINTER(ctypes.c_size_t),
+        ctypes.POINTER(ctypes.c_uint8),
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(ctypes.c_char_p),
+        ctypes.POINTER(ctypes.c_size_t),
+        frame_out,
+    ]
+    lib.eus_frame_from_columns.restype = ctypes.c_int32
 
     lib.eus_frame_select.argtypes = [
         ctypes.c_void_p,

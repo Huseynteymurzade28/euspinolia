@@ -4,9 +4,10 @@
 //!
 //! - Every symbol is prefixed with `eus_`.
 //! - A `DataFrame` crosses the boundary as an opaque pointer. It is created by
-//!   `eus_read_csv` / `eus_parse_csv` / `eus_frame_filter_*` /
-//!   `eus_frame_select` / `eus_frame_sort` / `eus_frame_groupby` and must be
-//!   released with `eus_frame_free`; nothing else owns it.
+//!   `eus_read_csv` / `eus_parse_csv` / `eus_frame_from_columns` /
+//!   `eus_frame_filter_*` / `eus_frame_select` / `eus_frame_sort` /
+//!   `eus_frame_groupby` and must be released with `eus_frame_free`; nothing
+//!   else owns it.
 //! - Functions that can fail return an `i32` status (`Status`) and write their
 //!   result through an out-parameter. Zig error sets do not survive the C ABI,
 //!   so every error is mapped to a status code once, here.
@@ -72,6 +73,7 @@ pub const Status = enum(i32) {
     invalid_operator = 17,
     invalid_aggregate = 18,
     invalid_delimiter = 19,
+    invalid_column_data = 20,
     unknown = 99,
 
     fn message(self: Status) [:0]const u8 {
@@ -96,6 +98,7 @@ pub const Status = enum(i32) {
             .invalid_operator => "unknown comparison operator",
             .invalid_aggregate => "unknown aggregate function",
             .invalid_delimiter => "the delimiter cannot be a quote or a line break",
+            .invalid_column_data => "a column's type tag or string offsets are invalid",
             .unknown => "unknown error",
         };
     }
@@ -171,6 +174,69 @@ export fn eus_parse_csv(
         return @intFromEnum(statusFor(err));
 
     return publish(gpa, parsed, out_frame);
+}
+
+/// Builds a frame from `column_count` caller-owned columns of `row_count`
+/// values each; everything is copied, so the caller may free its buffers as
+/// soon as this returns. For column `i`, `types[i]` is a `dtype.ColumnType`
+/// tag, and `values[i]` points at `row_count` `i64`s or `f64`s — or, for a
+/// string column, at `row_count + 1` offsets into `string_data[i]`, which is
+/// `string_lens[i]` bytes long. `string_data` and `string_lens` are read only
+/// for string columns.
+export fn eus_frame_from_columns(
+    column_count: usize,
+    row_count: usize,
+    name_ptrs: [*]const [*]const u8,
+    name_lens: [*]const usize,
+    types: [*]const u8,
+    values: [*]const ?*const anyopaque,
+    string_data: [*]const ?[*]const u8,
+    string_lens: [*]const usize,
+    out_frame: *?*DataFrame,
+) i32 {
+    const gpa = allocator();
+    const names = gpa.alloc([]const u8, column_count) catch
+        return @intFromEnum(Status.out_of_memory);
+    defer gpa.free(names);
+    const columns = gpa.alloc(frame.Column, column_count) catch
+        return @intFromEnum(Status.out_of_memory);
+    defer gpa.free(columns);
+
+    for (names, columns, 0..) |*name, *column, i| {
+        name.* = name_ptrs[i][0..name_lens[i]];
+        column.* = borrowColumn(types[i], values[i], string_data[i], string_lens[i], row_count) orelse
+            return @intFromEnum(Status.invalid_column_data);
+    }
+
+    const built = DataFrame.fromColumns(gpa, names, columns, row_count) catch |err|
+        return @intFromEnum(statusFor(err));
+    return publish(gpa, built, out_frame);
+}
+
+/// Views one caller-owned column, or null if the tag is unknown, a needed
+/// pointer is missing, or string offsets do not describe the data buffer.
+fn borrowColumn(
+    tag: u8,
+    values: ?*const anyopaque,
+    data: ?[*]const u8,
+    data_len: usize,
+    row_count: usize,
+) ?frame.Column {
+    const column_type = std.enums.fromInt(dtype.ColumnType, tag) orelse return null;
+    const pointer = values orelse return null;
+    switch (column_type) {
+        .int => return .{ .int = @as([*]const i64, @ptrCast(@alignCast(pointer)))[0..row_count] },
+        .float => return .{ .float = @as([*]const f64, @ptrCast(@alignCast(pointer)))[0..row_count] },
+        .string => {
+            const offsets = @as([*]const usize, @ptrCast(@alignCast(pointer)))[0 .. row_count + 1];
+            if (offsets[0] != 0 or offsets[row_count] != data_len) return null;
+            for (offsets[0..row_count], offsets[1..]) |start, end| {
+                if (start > end) return null;
+            }
+            const bytes: []const u8 = if (data_len == 0) "" else (data orelse return null)[0..data_len];
+            return .{ .string = .{ .offsets = offsets, .data = bytes } };
+        },
+    }
 }
 
 /// Moves a frame onto the heap so it can outlive this call.
@@ -482,6 +548,82 @@ fn parseForTest(text: []const u8) !*DataFrame {
     const code = eus_parse_csv(text.ptr, text.len, ',', &handle);
     try testing.expectEqual(@as(i32, 0), code);
     return handle.?;
+}
+
+test "a frame can be built from caller-owned columns" {
+    const ints = [_]i64{ 7, 8 };
+    const offsets = [_]usize{ 0, 2, 2 };
+    const data = "hi";
+    const names = [_][*]const u8{ "n", "s" };
+    const name_lens = [_]usize{ 1, 1 };
+    const types = [_]u8{ @intFromEnum(dtype.ColumnType.int), @intFromEnum(dtype.ColumnType.string) };
+    const values = [_]?*const anyopaque{ &ints, &offsets };
+    const string_data = [_]?[*]const u8{ null, data };
+    const string_lens = [_]usize{ 0, data.len };
+
+    var handle: ?*DataFrame = null;
+    try testing.expectEqual(@as(i32, 0), eus_frame_from_columns(
+        2,
+        2,
+        &names,
+        &name_lens,
+        &types,
+        &values,
+        &string_data,
+        &string_lens,
+        &handle,
+    ));
+    defer eus_frame_free(handle);
+
+    try testing.expectEqualSlices(i64, &.{ 7, 8 }, eus_frame_ints(handle.?, 0).?[0..2]);
+    try testing.expectEqualSlices(usize, &.{ 0, 2, 2 }, eus_frame_string_offsets(handle.?, 1).?[0..3]);
+}
+
+test "inconsistent columns are refused" {
+    const offsets = [_]usize{ 0, 3, 2 };
+    const names = [_][*]const u8{"s"};
+    const name_lens = [_]usize{1};
+    const string_tag = [_]u8{@intFromEnum(dtype.ColumnType.string)};
+    const values = [_]?*const anyopaque{&offsets};
+    const string_data = [_]?[*]const u8{"abc"};
+
+    var handle: ?*DataFrame = null;
+    // Offsets that run backwards, then a last offset that misses the data length.
+    try testing.expectEqual(@intFromEnum(Status.invalid_column_data), eus_frame_from_columns(
+        1,
+        2,
+        &names,
+        &name_lens,
+        &string_tag,
+        &values,
+        &string_data,
+        &[_]usize{2},
+        &handle,
+    ));
+    try testing.expectEqual(@intFromEnum(Status.invalid_column_data), eus_frame_from_columns(
+        1,
+        2,
+        &names,
+        &name_lens,
+        &string_tag,
+        &values,
+        &string_data,
+        &[_]usize{3},
+        &handle,
+    ));
+    // An unknown type tag.
+    try testing.expectEqual(@intFromEnum(Status.invalid_column_data), eus_frame_from_columns(
+        1,
+        2,
+        &names,
+        &name_lens,
+        &[_]u8{9},
+        &values,
+        &string_data,
+        &[_]usize{2},
+        &handle,
+    ));
+    try testing.expect(handle == null);
 }
 
 test "parse and free round trip" {

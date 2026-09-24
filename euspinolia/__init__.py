@@ -24,10 +24,12 @@
 from __future__ import annotations
 
 import ctypes
+import itertools
+import math
 import os
 import platform
 import sys
-from typing import Any, Iterator
+from typing import Any, Iterable, Iterator, Mapping
 
 from ._ffi import (
     EXPECTED_MAGIC,
@@ -42,6 +44,7 @@ from ._ffi import (
 __all__ = [
     "read_csv",
     "parse_csv",
+    "from_dict",
     "DataFrame",
     "Column",
     "Condition",
@@ -99,6 +102,98 @@ def parse_csv(text: str | bytes, *, delimiter: str = ",") -> DataFrame:
     handle = ctypes.c_void_p()
     check(lib.eus_parse_csv(encoded, len(encoded), separator, ctypes.byref(handle)))
     return DataFrame(handle.value)
+
+
+def from_dict(data: Mapping[str, Iterable[int | float | str]]) -> DataFrame:
+    """Build a `DataFrame` from a mapping of column names to values.
+
+    Each column's type follows from its values, the way parsing infers it:
+    only `int`s make an `int` column, `int`s and `float`s together a `float`
+    column, only `str`s a `string` column, and no values at all a `string`
+    column. Anything else is refused rather than converted — mixing text
+    with numbers, `None`, `bool`, and non-finite floats — since the library
+    has no missing values and no object columns.
+    """
+    names: list[bytes] = []
+    columns: list[_ColumnBuffers] = []
+    rows: int | None = None
+    for name, values in data.items():
+        if not isinstance(name, str):
+            raise TypeError(f"column names must be str, not {type(name).__name__}")
+        if isinstance(values, (str, bytes)):
+            raise TypeError(f"column {name!r} must be a sequence of values, not a single string")
+        buffers = _ColumnBuffers(name, list(values))
+        if rows is None:
+            rows = buffers.rows
+        elif buffers.rows != rows:
+            raise ValueError(
+                f"column {name!r} has {buffers.rows} values, but the columns before it have {rows}"
+            )
+        names.append(name.encode("utf-8"))
+        columns.append(buffers)
+
+    count = len(columns)
+    out = ctypes.c_void_p()
+    check(
+        lib.eus_frame_from_columns(
+            count,
+            rows or 0,
+            (ctypes.c_char_p * count)(*names),
+            (ctypes.c_size_t * count)(*map(len, names)),
+            (ctypes.c_uint8 * count)(*(column.dtype for column in columns)),
+            (ctypes.c_void_p * count)(*(ctypes.addressof(column.values) for column in columns)),
+            (ctypes.c_char_p * count)(*(column.data for column in columns)),
+            (ctypes.c_size_t * count)(*(len(column.data) for column in columns)),
+            ctypes.byref(out),
+        )
+    )
+    return DataFrame(out.value)
+
+
+_INT64_MIN, _INT64_MAX = -(2**63), 2**63 - 1
+
+
+class _ColumnBuffers:
+    """One column of `from_dict` input, laid out the way the Zig side stores it."""
+
+    __slots__ = ("rows", "dtype", "values", "data")
+
+    def __init__(self, name: str, values: list[Any]) -> None:
+        self.rows = len(values)
+        self.data = b""
+
+        # Decided per type rather than per value: one pass to collect them.
+        kinds = set(map(type, values))
+        for kind in kinds:
+            if issubclass(kind, bool) or not issubclass(kind, (int, float, str)):
+                what = "None" if kind is type(None) else kind.__name__
+                raise TypeError(f"column {name!r} holds {what}; values must be int, float or str")
+
+        text = sum(issubclass(kind, str) for kind in kinds)
+        if text == len(kinds):
+            self._strings(values)
+        elif text:
+            raise TypeError(f"column {name!r} mixes text with numbers")
+        elif all(issubclass(kind, int) for kind in kinds):
+            if not (_INT64_MIN <= min(values) and max(values) <= _INT64_MAX):
+                raise OverflowError(f"column {name!r} holds an integer outside 64 bits")
+            self.dtype = ColumnType.INT
+            # One slot of slack: a zero-length ctypes array may have no address.
+            self.values = (ctypes.c_int64 * (self.rows + 1))(*values)
+        else:
+            floats = [float(value) for value in values]
+            if not all(map(math.isfinite, floats)):
+                raise ValueError(f"column {name!r} holds a non-finite float")
+            self.dtype = ColumnType.FLOAT
+            self.values = (ctypes.c_double * (self.rows + 1))(*floats)
+
+    def _strings(self, values: list[str]) -> None:
+        encoded = [value.encode("utf-8") for value in values]
+        self.dtype = ColumnType.STRING
+        self.data = b"".join(encoded)
+        self.values = (ctypes.c_size_t * (self.rows + 1))(
+            0, *itertools.accumulate(map(len, encoded))
+        )
 
 
 def _delimiter_byte(delimiter: str) -> int:
@@ -518,6 +613,10 @@ class DataFrame:
             raise KeyError(
                 f"no column named {key!r}; have {', '.join(map(repr, self._columns))}"
             ) from None
+
+    def to_dict(self) -> dict[str, list[Any]]:
+        """Every column as a list, keyed by name. `from_dict` reads it back."""
+        return {name: self[name].to_list() for name in self._columns}
 
     def row(self, index: int) -> tuple[Any, ...]:
         """One row as a tuple, in column order."""

@@ -102,6 +102,46 @@ pub const DataFrame = struct {
         return frame;
     }
 
+    /// Builds a frame from columns someone else laid out, copying the names
+    /// and every buffer, so the caller keeps ownership of what it passed.
+    /// Every column must hold `row_count` values.
+    pub fn fromColumns(
+        gpa: Allocator,
+        names: []const []const u8,
+        columns: []const Column,
+        row_count: usize,
+    ) !DataFrame {
+        std.debug.assert(names.len == columns.len);
+
+        var frame: DataFrame = .{
+            .arena = .init(gpa),
+            .names = &.{},
+            .columns = &.{},
+            .row_count = row_count,
+        };
+        errdefer frame.arena.deinit();
+        const arena = frame.arena.allocator();
+
+        const owned_names = try arena.alloc([]const u8, names.len);
+        const owned_columns = try arena.alloc(Column, columns.len);
+        for (owned_names, owned_columns, names, columns) |*name, *slot, source_name, source| {
+            std.debug.assert(source.len() == row_count);
+            name.* = try arena.dupe(u8, source_name);
+            slot.* = switch (source) {
+                .int => |values| .{ .int = try arena.dupe(i64, values) },
+                .float => |values| .{ .float = try arena.dupe(f64, values) },
+                .string => |values| .{ .string = .{
+                    .offsets = try arena.dupe(usize, values.offsets),
+                    .data = try arena.dupe(u8, values.data),
+                } },
+            };
+        }
+        frame.names = owned_names;
+        frame.columns = owned_columns;
+
+        return frame;
+    }
+
     /// Parses an in-memory buffer straight into columnar form. The row-major
     /// table is a staging step and is released before returning.
     pub fn parse(gpa: Allocator, input: []const u8, options: csv.Options) !DataFrame {
@@ -198,32 +238,16 @@ pub const DataFrame = struct {
     /// `take`, the result owns its own copies. Every index must be in range;
     /// repeats are allowed here and left to the caller to refuse.
     pub fn select(self: DataFrame, gpa: Allocator, indices: []const usize) !DataFrame {
-        var result: DataFrame = .{
-            .arena = .init(gpa),
-            .names = &.{},
-            .columns = &.{},
-            .row_count = self.row_count,
-        };
-        errdefer result.arena.deinit();
-        const arena = result.arena.allocator();
+        const names = try gpa.alloc([]const u8, indices.len);
+        defer gpa.free(names);
+        const columns = try gpa.alloc(Column, indices.len);
+        defer gpa.free(columns);
 
-        const names = try arena.alloc([]const u8, indices.len);
-        const columns = try arena.alloc(Column, indices.len);
         for (names, columns, indices) |*name, *slot, index| {
-            name.* = try arena.dupe(u8, self.names[index]);
-            slot.* = switch (self.columns[index]) {
-                .int => |values| .{ .int = try arena.dupe(i64, values) },
-                .float => |values| .{ .float = try arena.dupe(f64, values) },
-                .string => |values| .{ .string = .{
-                    .offsets = try arena.dupe(usize, values.offsets),
-                    .data = try arena.dupe(u8, values.data),
-                } },
-            };
+            name.* = self.names[index];
+            slot.* = self.columns[index];
         }
-        result.names = names;
-        result.columns = columns;
-
-        return result;
+        return fromColumns(gpa, names, columns, self.row_count);
     }
 
     pub fn deinit(self: *DataFrame) void {
@@ -631,4 +655,29 @@ test "reorder gathers rows by position, repeats included" {
     try testing.expectEqualSlices(i64, &.{ 3, 1, 3 }, out.ints(0).?);
     try testing.expectEqualSlices(usize, &.{ 0, 5, 8, 13 }, out.strings(1).?.offsets);
     try testing.expectEqualStrings("graceadagrace", out.strings(1).?.data);
+}
+
+test "fromColumns copies what it is given" {
+    var ints = [_]i64{ 1, 2 };
+    const offsets = [_]usize{ 0, 3, 3 };
+    var data = "ada".*;
+    var name = "n".*;
+
+    var df = try DataFrame.fromColumns(
+        testing.allocator,
+        &.{ &name, "s" },
+        &.{ .{ .int = &ints }, .{ .string = .{ .offsets = &offsets, .data = &data } } },
+        2,
+    );
+    defer df.deinit();
+
+    // Scribble over the sources: the frame must not notice.
+    ints[0] = 99;
+    data[0] = 'X';
+    name[0] = 'Q';
+
+    try testing.expectEqualStrings("n", df.names[0]);
+    try testing.expectEqualSlices(i64, &.{ 1, 2 }, df.ints(0).?);
+    try testing.expectEqualStrings("ada", df.strings(1).?.get(0));
+    try testing.expectEqualStrings("", df.strings(1).?.get(1));
 }
