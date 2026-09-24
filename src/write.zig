@@ -16,9 +16,11 @@ const DataFrame = frame.DataFrame;
 /// Writes `df` as CSV to `w`. `options` must already be valid.
 pub fn write(df: DataFrame, w: *Writer, options: csv.Options) Writer.Error!void {
     const delimiter = options.delimiter;
+    // A lone empty field would print as a blank line, which the parser skips.
+    const alone = df.columns.len == 1;
     for (df.names, 0..) |name, i| {
         if (i > 0) try w.writeByte(delimiter);
-        try writeField(w, name, delimiter);
+        try writeField(w, name, delimiter, alone);
     }
     try w.writeByte('\n');
 
@@ -28,7 +30,7 @@ pub fn write(df: DataFrame, w: *Writer, options: csv.Options) Writer.Error!void 
             switch (column) {
                 .int => |values| try w.print("{d}", .{values[row]}),
                 .float => |values| try writeFloat(w, values[row]),
-                .string => |values| try writeField(w, values.get(row), delimiter),
+                .string => |values| try writeField(w, values.get(row), delimiter, alone),
             }
         }
         try w.writeByte('\n');
@@ -44,7 +46,8 @@ pub fn toOwnedSlice(gpa: Allocator, df: DataFrame, options: csv.Options) ![]u8 {
     return out.toOwnedSlice();
 }
 
-fn writeField(w: *Writer, text: []const u8, delimiter: u8) Writer.Error!void {
+fn writeField(w: *Writer, text: []const u8, delimiter: u8, alone: bool) Writer.Error!void {
+    if (alone and text.len == 0) return w.writeAll("\"\"");
     const special = [_]u8{ delimiter, '"', '\r', '\n' };
     if (std.mem.indexOfAny(u8, text, &special) == null) return w.writeAll(text);
 
@@ -101,7 +104,7 @@ test "a header alone is still a record" {
 test "quotes only the fields that need it" {
     const out = try roundTrip("s\n\"Doe, John\"\n\"say \"\"hi\"\"\"\n\"two\nlines\"\nplain\n\"\"\n");
     defer testing.allocator.free(out);
-    try testing.expectEqualStrings("s\n\"Doe, John\"\n\"say \"\"hi\"\"\"\n\"two\nlines\"\nplain\n\n", out);
+    try testing.expectEqualStrings("s\n\"Doe, John\"\n\"say \"\"hi\"\"\"\n\"two\nlines\"\nplain\n\"\"\n", out);
 }
 
 test "quotes a header that needs it" {
@@ -152,4 +155,19 @@ test "refuses a delimiter the format reserves" {
     var df = try DataFrame.parse(testing.allocator, "a\n1\n", .{});
     defer df.deinit();
     try testing.expectError(error.InvalidDelimiter, toOwnedSlice(testing.allocator, df, .{ .delimiter = '"' }));
+}
+
+test "a lone empty field is quoted so it is not read as a blank line" {
+    const out = try roundTrip("\"\"\n\"\"\nx\n\"\"\n");
+    defer testing.allocator.free(out);
+    try testing.expectEqualStrings("\"\"\n\"\"\nx\n\"\"\n", out);
+
+    var again = try DataFrame.parse(testing.allocator, out, .{});
+    defer again.deinit();
+    try testing.expectEqual(@as(usize, 3), again.rowCount());
+
+    // With a second column the empty field is unambiguous and stays bare.
+    const pair = try roundTrip("a,b\n,1\n");
+    defer testing.allocator.free(pair);
+    try testing.expectEqualStrings("a,b\n,1\n", pair);
 }

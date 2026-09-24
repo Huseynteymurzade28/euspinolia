@@ -772,6 +772,11 @@ class TestToCsv(unittest.TestCase):
     def test_header_only(self):
         self.assertEqual(euspinolia.parse_csv("a,b\n").to_csv(), "a,b\n")
 
+    def test_a_lone_empty_field_survives(self):
+        df = euspinolia.parse_csv('s\n""\nx\n')
+        self.assertEqual(df.to_csv(), 's\n""\nx\n')
+        self.assertEqual(euspinolia.parse_csv(df.to_csv())["s"].to_list(), ["", "x"])
+
     def test_unicode_survives(self):
         df = euspinolia.parse_csv("şehir\nİstanbul\n")
         self.assertEqual(df.to_csv(), "şehir\nİstanbul\n")
