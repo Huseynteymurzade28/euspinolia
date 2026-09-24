@@ -198,6 +198,9 @@ Python.
 
 ## Documentation
 
+Everything below is also published as a site:
+**[huseynteymurzade28.github.io/euspinolia](https://huseynteymurzade28.github.io/euspinolia/)**.
+
 - [API reference](docs/api.md) — every function, method, argument and exception
 - [Internals](docs/internals.md) — the Zig side, module by module, and the ABI
 - [Benchmarks](docs/benchmarks.md) — the numbers above, what they measure and why they come out that way
