@@ -26,3 +26,7 @@ dist/
 euspinolia/*.so
 euspinolia/*.dylib
 euspinolia/*.dll
+
+# MkDocs output
+site/
+.venv-docs/

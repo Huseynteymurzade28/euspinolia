@@ -74,7 +74,8 @@ tests/test_cli.py       the command line
 bench/make_big.py       writes the 500,000-row CSV the benchmark reads
 bench/bench.py          euspinolia vs pandas vs the csv module, as a table
 hatch_build.py          build hook: compile with Zig, put the library in the wheel
-docs/                   what you are reading
+docs/                   what you are reading; also built into the site
+mkdocs.yml              the documentation site's navigation and theme
 ```
 
 ## Adding to the ABI
@@ -140,6 +141,23 @@ Pi OS is armhf.
 shared libraries", consistent with `manylinux_2_5`. Because the package is
 pure Python plus one `ctypes` library, the wheels are tagged `py3-none-*`
 and work for every Python 3.9+ on the platform.
+
+## Documentation site
+
+`docs/` is also built with MkDocs Material and published to GitHub Pages by
+`.github/workflows/docs.yml` on every push to `main` that touches it. To
+preview it locally:
+
+```sh
+python3 -m venv .venv-docs && .venv-docs/bin/pip install -r docs/requirements.txt
+.venv-docs/bin/mkdocs serve        # http://127.0.0.1:8000, reloads on save
+```
+
+`mkdocs.yml` holds the navigation and theme, `docs/stylesheets/extra.css`
+the colours, and `docs/index.md` the home page. The logos stay in `assets/`,
+where the README links them for PyPI; `docs/hooks.py` serves them into the
+site at build time. CI builds with `--strict`, so a broken link or anchor
+fails the deploy.
 
 ## Releasing
 

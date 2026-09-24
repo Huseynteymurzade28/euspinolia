@@ -1,0 +1,235 @@
+/* euspinolia — black and white like the panda ant, one amber accent like
+   the velvet ant's coat (and Zig's orange). Square corners, thin rules. */
+
+:root,
+[data-md-color-scheme="default"] {
+  --md-primary-fg-color: #0c0c0e;
+  --md-primary-fg-color--light: #1d1d21;
+  --md-primary-fg-color--dark: #000000;
+  --md-primary-bg-color: #fafaf9;
+  --md-primary-bg-color--light: #a8a29e;
+  --md-accent-fg-color: #f59e0b;
+  --md-accent-fg-color--transparent: rgb(245 158 11 / 10%);
+  --md-typeset-a-color: #b45309;
+  --md-code-bg-color: #f5f5f4;
+  --eus-rule: #e7e5e4;
+  --eus-muted: #78716c;
+  --eus-bar-other: #d6d3d1;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-hue: 240;
+  --md-default-bg-color: #0d0d0f;
+  --md-default-fg-color--light: #a1a1aa;
+  --md-primary-fg-color: #09090b;
+  --md-code-bg-color: #16161a;
+  --md-accent-fg-color: #fbbf24;
+  --md-accent-fg-color--transparent: rgb(251 191 36 / 10%);
+  --md-typeset-a-color: #fbbf24;
+  --eus-rule: #27272a;
+  --eus-muted: #a1a1aa;
+  --eus-bar-other: #3f3f46;
+}
+
+/* Header and tabs: one black band, underlined in amber. */
+.md-header {
+  box-shadow: none;
+}
+.md-tabs {
+  border-bottom: 2px solid var(--md-accent-fg-color);
+}
+.md-tabs__link {
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  opacity: 0.75;
+}
+.md-tabs__item--active .md-tabs__link,
+.md-tabs__link:hover {
+  color: var(--md-accent-fg-color);
+  opacity: 1;
+}
+.md-header__button.md-logo img {
+  height: 1.7rem;
+}
+
+/* Where the tabs show, the left sidebar would only repeat the current
+   page; below that width it is the navigation drawer and stays. */
+@media screen and (min-width: 76.25em) {
+  .md-sidebar--primary {
+    display: none;
+  }
+}
+
+/* Type: tight, heavy headings. */
+.md-typeset h1 {
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  color: var(--md-default-fg-color);
+}
+.md-typeset h2 {
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--eus-rule);
+}
+.md-typeset h3 {
+  font-weight: 650;
+}
+.md-typeset a {
+  text-underline-offset: 0.2em;
+}
+.md-typeset a:hover {
+  color: var(--md-accent-fg-color);
+}
+
+/* Square corners everywhere. */
+.md-typeset pre > code,
+.md-typeset code,
+.md-typeset .admonition,
+.md-typeset details,
+.md-typeset .md-button,
+.md-typeset .grid.cards > ul > li,
+.md-search__form,
+.md-search__output,
+.md-typeset table:not([class]) {
+  border-radius: 0;
+}
+
+/* Tables: hairlines, small-caps header. */
+.md-typeset table:not([class]) {
+  border: 1px solid var(--eus-rule);
+  box-shadow: none;
+  font-size: 0.72rem;
+}
+.md-typeset table:not([class]) th {
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--eus-muted);
+  background: transparent;
+  border-bottom: 1px solid var(--eus-rule);
+}
+.md-typeset table:not([class]) td {
+  border-top: 1px solid var(--eus-rule);
+}
+
+.md-typeset .md-button {
+  font-weight: 600;
+  border-width: 1px;
+  color: var(--md-default-fg-color);
+  border-color: var(--md-default-fg-color--lighter);
+}
+.md-typeset .md-button--primary {
+  background: var(--md-default-fg-color);
+  border-color: var(--md-default-fg-color);
+  color: var(--md-default-bg-color);
+}
+.md-typeset .md-button--primary:hover,
+.md-typeset .md-button:hover {
+  background: var(--md-accent-fg-color);
+  border-color: var(--md-accent-fg-color);
+  color: #0c0c0e;
+}
+
+/* Home page. */
+.eus-hero {
+  text-align: center;
+  padding: 1.5rem 0 1rem;
+}
+.eus-hero .md-button {
+  margin: 0.2rem;
+}
+.eus-hero img {
+  width: 9rem;
+  margin-bottom: 0.4rem;
+}
+.md-typeset .eus-hero h1 {
+  font-size: 3rem;
+  margin: 0 0 0.4rem;
+}
+.eus-tagline {
+  font-size: 1.05rem;
+  color: var(--md-default-fg-color--light);
+  max-width: 34rem;
+  margin: 0 auto 1.2rem !important;
+}
+.eus-install {
+  display: inline-block;
+  font-family: var(--md-code-font-family);
+  font-size: 0.8rem;
+  padding: 0.5rem 1rem;
+  margin-bottom: 1.2rem;
+  border: 1px solid var(--eus-rule);
+  background: var(--md-code-bg-color);
+}
+.eus-install::before {
+  content: "$ ";
+  color: var(--md-accent-fg-color);
+}
+
+.md-typeset .grid.cards {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+}
+.md-typeset .grid.cards > ul > li {
+  border: 1px solid var(--eus-rule);
+  box-shadow: none;
+  transition: border-color 150ms;
+}
+.md-typeset .grid.cards > ul > li:hover {
+  border-color: var(--md-accent-fg-color);
+  box-shadow: none;
+}
+.md-typeset .grid.cards .twemoji {
+  color: var(--md-accent-fg-color);
+}
+
+/* Benchmark bars: euspinolia in amber, pandas in grey, both against the
+   slower of the two for that job. */
+.eus-bench {
+  display: grid;
+  grid-template-columns: 7.5rem 1fr;
+  gap: 0.35rem 1rem;
+  align-items: center;
+  font-size: 0.72rem;
+  margin: 1rem 0 0.4rem;
+}
+.eus-bench .job {
+  font-weight: 600;
+}
+.eus-bench .bars {
+  display: grid;
+  gap: 2px;
+}
+.eus-bench .bar {
+  display: flex;
+  align-items: center;
+  height: 1.1rem;
+  min-width: 3.2rem;
+  padding-left: 0.4rem;
+  font-family: var(--md-code-font-family);
+  font-size: 0.62rem;
+  white-space: nowrap;
+  color: #0c0c0e;
+  background: var(--md-accent-fg-color);
+}
+.eus-bench .bar.other {
+  color: var(--md-default-fg-color);
+  background: var(--eus-bar-other);
+}
+.eus-legend {
+  font-size: 0.66rem;
+  color: var(--eus-muted);
+}
+.eus-legend span::before {
+  content: "";
+  display: inline-block;
+  width: 0.6rem;
+  height: 0.6rem;
+  margin: 0 0.3rem 0 0.8rem;
+  vertical-align: -0.05rem;
+  background: var(--md-accent-fg-color);
+}
+.eus-legend span.other::before {
+  background: var(--eus-bar-other);
+}
