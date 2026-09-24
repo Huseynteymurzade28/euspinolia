@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 # Must stay in sync with src/root.zig.
-EXPECTED_VERSION = "0.1.1"
+EXPECTED_VERSION = "0.2.0"
 EXPECTED_MAGIC = 0xE05
 
 

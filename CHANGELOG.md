@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.2.0 — 2026-09-24
+
+- `read_csv`, `parse_csv` and `to_csv` take a keyword-only `delimiter`:
+  `";"`, `"\t"` for TSV, or any other single ASCII character but a quote or
+  a line break.
+- `df[["name", "age"]]` and `df.select([...])` pick columns into a new frame.
+- `df.sort_values(by, ascending=True)`: a stable sort by one column, radix
+  for numbers, faster than pandas' stable sort on the benchmark.
+- `from_dict({...})` builds a frame from Python data, typing each column by
+  its values; `df.to_dict()` is the inverse.
+- An `euspinolia` command: `stats` for types, ranges and distinct counts per
+  column, `head` for the first rows. Also `python -m euspinolia`.
+- Fixed: in a one-column frame, `to_csv` wrote an empty string as a blank
+  line, which the parser skips, so the row was lost on reading it back.
+- Column lookup no longer accepts a `bool` as a position.
+- The C ABI changed (`eus_read_csv`, `eus_parse_csv` and `eus_frame_to_csv`
+  take a delimiter); the library and its Python layer ship together, and
+  `self_check` catches a mismatched pair.
+
 ## 0.1.1 — 2026-09-19
 
 - Wheels for 32-bit ARM Linux (`armv7l`), so Raspberry Pi OS installs do

@@ -24,7 +24,7 @@ comptime {
     _ = ffi;
 }
 
-const version_string: [:0]const u8 = "0.1.1";
+const version_string: [:0]const u8 = "0.2.0";
 
 /// Signature value returned by `eus_ping`; mismatches mean a stale library.
 pub const magic: i32 = 0xE05;
@@ -60,5 +60,5 @@ test "add wraps on overflow" {
 }
 
 test "version is a readable string" {
-    try std.testing.expectEqualStrings("0.1.1", std.mem.span(eus_version()));
+    try std.testing.expectEqualStrings("0.2.0", std.mem.span(eus_version()));
 }
