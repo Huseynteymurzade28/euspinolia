@@ -33,6 +33,9 @@ classifiers = [
     "Typing :: Typed",
 ]
 
+[project.scripts]
+euspinolia = "euspinolia.__main__:main"
+
 [project.urls]
 Homepage = "https://github.com/Huseynteymurzade28/euspinolia"
 Documentation = "https://github.com/Huseynteymurzade28/euspinolia/tree/main/docs"

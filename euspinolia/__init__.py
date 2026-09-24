@@ -755,12 +755,15 @@ class DataFrame:
     def __repr__(self) -> str:
         if self._handle is None:
             return "<DataFrame (closed)>"
+        return self._render(10)
 
+    def _render(self, limit: int) -> str:
+        """The first `limit` rows as an aligned table, then the shape."""
         rows, columns = self.shape
         if columns == 0:
             return f"<DataFrame: {rows} rows x 0 columns>"
 
-        shown = min(rows, 10)
+        shown = min(rows, limit)
         cells = [[_format(self[name][row]) for name in self._columns] for row in range(shown)]
 
         gutter = len(str(shown - 1)) if shown else 1
